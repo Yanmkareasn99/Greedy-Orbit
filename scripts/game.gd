@@ -11,6 +11,12 @@ const ORBIT_SPEED := 2.65                 # radians per second (clockwise)
 const RADIUS_CHANGE_SPEED := 235.0        # px per second
 const NEAR_RANGE := 49.0                 # outer limit for an eligible near miss
 const COMBO_DURATION := 4.5              # seconds before combo starts decaying
+const PLANET_RADIUS := 31.0
+const SHIELD_RADIUS := 56.0
+const SHIELD_MAX_ENERGY := 100.0
+const SHIELD_DECAY_RATE := 3.2            # energy lost per second
+const SHIELD_REFILL_NEAR := 28.0
+const SHIELD_REFILL_PERFECT := 45.0
 const SAVE_FILE := "user://greedy_orbit_best.txt"
 
 const BACK := Color("#0b1221")
@@ -25,11 +31,13 @@ var rng := RandomNumberGenerator.new()
 var state := "menu"                       # menu, playing, paused, dead
 var elapsed := 0.0
 var angle := -PI / 2.0
+var orbit_direction := 1.0                # 1.0 = clockwise, -1.0 = counterclockwise
 var orbit_radius := OUTER_RADIUS
 var player_pos := CENTER + Vector2.UP * OUTER_RADIUS
 var spawn_clock := 0.0
 var points := 0.0
 var best_score := 0
+var shield_energy := SHIELD_MAX_ENERGY
 var combo := 1
 var combo_clock := 0.0
 var total_near_misses := 0
@@ -38,6 +46,7 @@ var next_wave := 2
 var time_to_wave_message := 0.0
 var flash := 0.0
 var shake := 0.0
+var death_reason := "player"
 var hazards: Array[Dictionary] = []
 var particles: Array[Dictionary] = []
 var popups: Array[Dictionary] = []
@@ -55,7 +64,9 @@ func _ready() -> void:
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_R:
+		if event.keycode == KEY_D:
+			reverse_orbit_direction()
+		elif event.keycode == KEY_R:
 			start_game()
 		elif event.keycode == KEY_P or event.keycode == KEY_ESCAPE:
 			if state == "playing":
@@ -68,6 +79,11 @@ func _input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if state == "menu" or state == "dead":
 			start_game()
+
+
+func reverse_orbit_direction() -> void:
+	orbit_direction *= -1.0
+	queue_redraw()
 
 
 func _process(delta: float) -> void:
@@ -85,6 +101,7 @@ func start_game() -> void:
 	orbit_radius = OUTER_RADIUS
 	player_pos = CENTER + Vector2.UP * orbit_radius
 	points = 0.0
+	shield_energy = SHIELD_MAX_ENERGY
 	combo = 1
 	combo_clock = 0.0
 	total_near_misses = 0
@@ -98,6 +115,7 @@ func start_game() -> void:
 	time_to_wave_message = 2.0
 	flash = 0.0
 	shake = 0.0
+	death_reason = "player"
 	$StartSound.play()
 	queue_redraw()
 
@@ -107,7 +125,7 @@ func _physics_process(delta: float) -> void:
 		return
 
 	elapsed += delta
-	points += 10.0 * delta
+	shield_energy = maxf(0.0, shield_energy - SHIELD_DECAY_RATE * delta)
 	flash = maxf(0.0, flash - 2.0 * delta)
 	shake = maxf(0.0, shake - 10.0 * delta)
 	time_to_wave_message = maxf(0.0, time_to_wave_message - delta)
@@ -115,7 +133,7 @@ func _physics_process(delta: float) -> void:
 	var contract := Input.is_key_pressed(KEY_SPACE) or Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
 	var desired_radius := INNER_RADIUS if contract else OUTER_RADIUS
 	orbit_radius = move_toward(orbit_radius, desired_radius, RADIUS_CHANGE_SPEED * delta)
-	angle = wrapf(angle + ORBIT_SPEED * delta, -PI, PI)
+	angle = wrapf(angle + ORBIT_SPEED * orbit_direction * delta, -PI, PI)
 	player_pos = CENTER + Vector2(cos(angle), sin(angle)) * orbit_radius
 
 	trail.append(player_pos)
@@ -165,7 +183,7 @@ func predicted_drifter_angle() -> float:
 	# Hazards pressure a stationary strategy but never have perfect aim.
 	var radial_speed := minf(300.0, 195.0 + elapsed * 1.2)
 	var impact_delay := (340.0 - orbit_radius) / radial_speed
-	return angle + ORBIT_SPEED * impact_delay + rng.randf_range(-1.70, 1.70)
+	return angle + ORBIT_SPEED * orbit_direction * impact_delay + rng.randf_range(-1.70, 1.70)
 
 
 func spawn_drifter(hazard_angle: float) -> void:
@@ -183,9 +201,10 @@ func spawn_drifter(hazard_angle: float) -> void:
 
 
 func spawn_satellite() -> void:
+	var player_angular_speed := ORBIT_SPEED * orbit_direction
 	var enemy_speed := -1.4
 	# Target a likely crossing in ~0.9 seconds, with readable lead time.
-	var spawn_angle := angle + (ORBIT_SPEED - enemy_speed) * rng.randf_range(0.88, 1.15)
+	var spawn_angle := angle + (player_angular_speed - enemy_speed) * rng.randf_range(0.88, 1.15)
 	var satellite_radius := clampf(orbit_radius + rng.randf_range(-29.0, 29.0), INNER_RADIUS + 7.0, OUTER_RADIUS - 7.0)
 	hazards.append({
 		"kind": "satellite",
@@ -215,7 +234,7 @@ func update_hazards(delta: float) -> void:
 		var collision_distance: float = PLAYER_SIZE + float(h["size"])
 		if old_enough:
 			if distance <= collision_distance:
-				die()
+				die("player")
 				return
 			h["min_separation"] = minf(float(h["min_separation"]), distance)
 			# Score after leaving the danger zone, never merely for being near.
@@ -224,6 +243,16 @@ func update_hazards(delta: float) -> void:
 				if closest >= collision_distance + 1.0 and closest <= NEAR_RANGE:
 					award_near_miss(closest, collision_distance, p)
 					h["awarded"] = true
+		if h["kind"] == "drifter":
+			var debris_radius := float(h["radius"])
+			var debris_size := float(h["size"])
+			if shield_energy > 0.0 and debris_radius <= SHIELD_RADIUS + debris_size:
+				absorb_debris(p)
+				hazards.remove_at(i)
+				continue
+			if debris_radius <= PLANET_RADIUS + debris_size:
+				die("planet")
+				return
 		var expired: bool = (h["kind"] == "drifter" and float(h["radius"]) < 38.0)
 		expired = expired or (h["kind"] == "satellite" and float(h["age"]) > 4.3)
 		if expired:
@@ -239,7 +268,9 @@ func award_near_miss(closest: float, collision_distance: float, where: Vector2) 
 	var perfect := closest <= collision_distance + 11.0
 	var base := 250 if perfect else 100
 	var gained: int = base * combo
+	var shield_refill := SHIELD_REFILL_PERFECT if perfect else SHIELD_REFILL_NEAR
 	points += float(gained)
+	shield_energy = minf(SHIELD_MAX_ENERGY, shield_energy + shield_refill)
 	total_near_misses += 1
 	if perfect:
 		perfect_misses += 1
@@ -253,10 +284,16 @@ func award_near_miss(closest: float, collision_distance: float, where: Vector2) 
 	$NearSound.play()
 
 
-func die() -> void:
+func absorb_debris(where: Vector2) -> void:
+	shake = maxf(shake, 1.1)
+	spawn_burst(GREEN, where, 9)
+
+
+func die(reason: String) -> void:
 	state = "dead"
+	death_reason = reason
 	shake = 3.0
-	spawn_burst(RED, player_pos, 32)
+	spawn_burst(RED, CENTER if reason == "planet" else player_pos, 32)
 	if int(points) > best_score:
 		best_score = int(points)
 		var save := FileAccess.open(SAVE_FILE, FileAccess.WRITE)
@@ -316,11 +353,12 @@ func _draw() -> void:
 	if flash > 0.0:
 		draw_rect(Rect2(Vector2.ZERO, WORLD), Color(CYAN.r, CYAN.g, CYAN.b, flash * 0.13))
 	if state == "menu":
-		draw_overlay("GREEDY ORBIT", "CHASE THE NEAR MISS", "HOLD SPACE / CLICK  =  MOVE IN", "RELEASE  =  MOVE OUT", "PRESS SPACE OR CLICK TO START")
+		draw_overlay("GREEDY ORBIT", "NEAR MISS TO POWER THE SHIELD", "HOLD SPACE / CLICK  =  MOVE IN", "RELEASE = MOVE OUT   |   DIRECTION = " + orbit_direction_label() + " [D]", "PRESS SPACE OR CLICK TO START")
 	elif state == "dead":
-		draw_overlay("ORBIT BROKEN", "SCORE  " + str(int(points)) + "     BEST  " + str(best_score), "NEAR MISSES  " + str(total_near_misses), "PERFECT DODGES  " + str(perfect_misses), "PRESS SPACE / CLICK / R TO RETRY")
+		var death_title := "PLANET LOST" if death_reason == "planet" else "ORBIT BROKEN"
+		draw_overlay(death_title, "SCORE  " + str(int(points)) + "     BEST  " + str(best_score), "NEAR MISSES  " + str(total_near_misses), "PERFECT DODGES  " + str(perfect_misses), "D = REVERSE   |   SPACE / CLICK / R = RETRY")
 	elif state == "paused":
-		draw_overlay("PAUSED", "", "", "", "PRESS P TO RESUME")
+		draw_overlay("PAUSED", "DIRECTION  " + orbit_direction_label(), "", "", "PRESS P / ESC TO RESUME   |   D TO REVERSE")
 
 
 func draw_stars() -> void:
@@ -336,15 +374,26 @@ func draw_arena() -> void:
 	draw_arc(CENTER, OUTER_RADIUS, 0.0, TAU, 128, Color(0.20, 0.50, 0.69, 0.35), 1.4, true)
 	draw_arc(CENTER, orbit_radius, 0.0, TAU, 128, Color(0.35, 0.84, 0.98, 0.24), 1.0, true)
 	draw_circle(CENTER, 38.0, Color(0.17, 0.32, 0.49, 0.09))
-	draw_circle(CENTER, 31.0, Color("#23435c"))
+	draw_circle(CENTER, PLANET_RADIUS, Color("#23435c"))
 	draw_circle(CENTER, 24.0, Color("#315e79"))
 	draw_circle(CENTER + Vector2(-7, -8), 9.0, Color(0.57, 0.83, 0.92, 0.28))
 	draw_arc(CENTER, 33.0, 0.0, TAU, 64, Color(0.55, 0.85, 1.0, 0.72), 1.8, true)
+	draw_planet_shield()
 	# Dashes around the outer boundary make angular motion easier to read.
 	for n in range(32):
 		var a := TAU * float(n) / 32.0
 		var v := Vector2(cos(a), sin(a))
 		draw_line(CENTER + v * 262.0, CENTER + v * 267.0, Color(0.37, 0.62, 0.76, 0.21), 1.0, true)
+
+
+func draw_planet_shield() -> void:
+	var fraction := shield_fraction()
+	if fraction <= 0.0:
+		return
+	var tint := shield_color(fraction)
+	draw_circle(CENTER, SHIELD_RADIUS, Color(tint.r, tint.g, tint.b, 0.025 + fraction * 0.045))
+	draw_arc(CENTER, SHIELD_RADIUS, 0.0, TAU, 96, Color(tint.r, tint.g, tint.b, 0.30 + fraction * 0.55), 2.0 + fraction * 2.0, true)
+	draw_arc(CENTER, SHIELD_RADIUS + 6.0, -PI / 2.0, -PI / 2.0 + TAU * fraction, 96, tint, 2.0, true)
 
 
 func draw_hazards() -> void:
@@ -389,18 +438,40 @@ func draw_hud() -> void:
 	draw_text("SCORE", Vector2(28, 36), 16, MUTED)
 	draw_text(str(int(points)).pad_zeros(6), Vector2(28, 73), 30, PALE)
 	draw_text("BEST  " + str(best_score), Vector2(28, 101), 16, MUTED)
+	var energy_fraction := shield_fraction()
+	var energy_color := shield_color(energy_fraction)
+	draw_text_center("SHIELD  " + str(roundi(shield_energy)) + "%", 35, 16, energy_color)
+	draw_rect(Rect2(Vector2(348, 45), Vector2(264, 12)), Color(0.12, 0.20, 0.29, 0.95))
+	draw_rect(Rect2(Vector2(351, 48), Vector2(258.0 * energy_fraction, 6)), energy_color)
 	var combo_color := GOLD if combo >= 3 else CYAN
 	draw_text("COMBO", Vector2(780, 36), 16, MUTED)
 	draw_text("x" + str(combo), Vector2(780, 76), 35, combo_color)
+	draw_text("DIR  " + orbit_direction_label(), Vector2(780, 116), 16, MUTED)
 	draw_text("WAVE " + str(mini(5, int(floor(elapsed / 15.0)) + 1)), Vector2(28, 686), 17, MUTED)
 	draw_text("TIME " + ("%.1f" % elapsed) + "s", Vector2(784, 686), 17, MUTED)
-	draw_text("HOLD = IN   |   RELEASE = OUT   |   P = PAUSE", Vector2(295, 688), 13, MUTED)
+	draw_text("HOLD = IN   |   RELEASE = OUT   |   D = REVERSE   |   P = PAUSE", Vector2(250, 688), 13, MUTED)
 	if combo > 1:
 		draw_rect(Rect2(Vector2(780, 90), Vector2(133, 5)), Color(0.19, 0.31, 0.44))
 		draw_rect(Rect2(Vector2(780, 90), Vector2(133.0 * clampf(combo_clock / COMBO_DURATION, 0.0, 1.0), 5)), combo_color)
 	if time_to_wave_message > 0.0 and state == "playing":
 		var announce_color := Color(CYAN.r, CYAN.g, CYAN.b, minf(1.0, time_to_wave_message))
 		draw_text_center("WAVE " + str(mini(5, int(floor(elapsed / 15.0)) + 1)), 164, 26, announce_color)
+
+
+func orbit_direction_label() -> String:
+	return "CW" if orbit_direction > 0.0 else "CCW"
+
+
+func shield_fraction() -> float:
+	return clampf(shield_energy / SHIELD_MAX_ENERGY, 0.0, 1.0)
+
+
+func shield_color(fraction: float) -> Color:
+	if fraction <= 0.25:
+		return RED
+	if fraction <= 0.55:
+		return GOLD
+	return GREEN
 
 
 func draw_overlay(title: String, sub: String, line1: String, line2: String, prompt: String) -> void:

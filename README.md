@@ -2,7 +2,7 @@
 
 A minimalist, single-player arcade game. Your player orbits a planet automatically.
 **Hold Space or the left mouse button** to pull inward; **release** to push outward.
-Almost collide with hazards to earn near-miss scores and climb to a **x5 combo**.
+Almost collide with hazards to earn near-miss scores, refill the planet's shield, and climb to a **x5 combo**.
 
 ## Open and play
 
@@ -19,17 +19,19 @@ Almost collide with hazards to earn near-miss scores and climb to a **x5 combo**
 | Space (hold) | Contract orbit |
 | Left mouse (hold) | Contract orbit |
 | Release | Expand orbit |
+| D | Reverse orbit direction |
 | Space / click | Start from title or retry after death |
 | R | Restart immediately |
 | P or Esc | Pause / resume |
 
 ## Included in prototype
 
-- Smooth one-button orbit movement; collision ends the run.
-- Radial **Drifters**, counter-orbiting **Rogue Satellites**, and **Twin Strike** patterns.
+- Smooth one-button orbit movement with selectable direction; collision ends the run.
+- Radial **Drifters**, counterclockwise **Rogue Satellites**, and **Twin Strike** patterns.
 - Spawn prediction with random aim errors (hazards pressure rather than strictly track the player).
-- Near-miss detection once per hazard, Perfect near misses, and x1–x5 combo with decay.
-- Survival points, elapsed time, wave progression, title / pause / death screens.
+- A planet shield that steadily loses energy over time and absorbs incoming Drifters without additional energy loss.
+- Near misses are the only source of points and shield energy; Perfect near misses refill more.
+- Planet-impact and player-collision game overs, x1–x5 combo, elapsed time, and wave progression.
 - Best score saved locally to `user://greedy_orbit_best.txt`.
 - Geometric graphics drawn with `Node2D._draw()`; 3 tiny generated WAV effects.
 

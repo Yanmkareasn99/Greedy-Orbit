@@ -10,15 +10,18 @@
 
 ## Mechanical rules
 
-- Player continuously moves clockwise around fixed center.
+- Player continuously moves around the fixed center, clockwise by default; D reverses direction.
 - Holding Space or left mouse smoothly contracts orbit from 234 px to 126 px.
 - Releasing smoothly expands to 234 px.
 - One collision with an active red hazard ends the run.
+- The planet's shield steadily loses energy over time; blocking incoming Drifters does not consume additional energy.
+- At zero energy the shield disappears; a Drifter that reaches the unshielded planet ends the run.
+- Near misses refill shield energy, with Perfect near misses restoring more.
 - Enemy Drifters spawn at a radius of 340 px and move radially toward the center.
 - Rogue Satellites orbit counterclockwise at a fixed radius near the player's current radius. They expire after a few seconds.
 - Twin Strike spawns two nearby Drifters using the same geometry and logic.
 - Hazard warning time is indicated by a translucent red appearance.
-- Each surviving second = 10 points.
+- Survival alone gives no points; all score comes from completed near misses.
 - A near miss requires an actual pass, not sitting near an enemy: the distance must first approach then separate beyond 55 px.
 - A near miss gives 100 * current_combo. A perfect near miss gives 250 * current_combo.
 - Perfect near-miss range extends 11 px beyond the lethal collision radius; normal near-miss range extends out to 49 px.
