@@ -1,5 +1,5 @@
 extends Node2D
-## Greedy Orbit: no sprites, no plugins, one arena, one-button gameplay.
+## Greedy Orbit: click hazards, earn money, and buy an orbiting backup guard.
 ## The game is drawn in _draw() and updated on fixed physics ticks.
 
 const CENTER := Vector2(480.0, 364.0)
@@ -7,16 +7,43 @@ const WORLD := Vector2(960.0, 720.0)
 const INNER_RADIUS := 126.0
 const OUTER_RADIUS := 234.0
 const PLAYER_SIZE := 9.0
+const CLICK_PADDING := 7.0               # include the visible hazard glow in click targets
+const CLICK_PULSE_DURATION := 0.32
+const MAX_CLICK_PULSES := 24
 const ORBIT_SPEED := 2.65                 # radians per second (clockwise)
 const RADIUS_CHANGE_SPEED := 235.0        # px per second
-const NEAR_RANGE := 49.0                 # outer limit for an eligible near miss
 const COMBO_DURATION := 4.5              # seconds before combo starts decaying
+const GAME_OVER_RETRY_DELAY := 2.0       # keep results visible before accepting restart inputs
 const PLANET_RADIUS := 31.0
 const SHIELD_RADIUS := 56.0
 const SHIELD_MAX_ENERGY := 100.0
-const SHIELD_DECAY_RATE := 3.2            # energy lost per second
-const SHIELD_REFILL_NEAR := 28.0
-const SHIELD_REFILL_PERFECT := 45.0
+const SHIELD_HIT_COST := 25.0             # energy spent blocking one incoming Drifter
+const SHIELD_REFILL_SATELLITE := 35.0     # energy restored by destroying a green Satellite
+const DRIFTER_SCORE := 100
+const SATELLITE_SCORE := 250
+const DRIFTER_MONEY := 10
+const SATELLITE_MONEY := 25
+const ENERGY_SPAWN_CHANCE := 0.10
+const ENERGY_ORBIT_MIN_DURATION := 2.5   # shortest random collection window
+const ENERGY_ORBIT_MAX_DURATION := 6.0   # longest random collection window
+const ENERGY_ESCAPE_SPEED := 240.0       # outward flight speed after collection time runs out
+const GUARD_COST := 60
+const GUARD_CONTROLS_COST := 75
+const GUARD_UPGRADE_COST := 50
+const SHIELD_ARMOR_COST := 60
+const SHIELD_REPAIR_COST := 30
+const SHIELD_REPAIR_ENERGY := 40.0
+const MAX_UPGRADE_LEVEL := 3
+const SHOP_BUTTON := Rect2(28, 114, 118, 32)
+const SHOP_CLOSE_BUTTON := Rect2(730, 153, 40, 32)
+const SHOP_ITEMS := [
+	{"id": "guard", "name": "Guard", "description": "Auto intercept"},
+	{"id": "speed", "name": "Speed", "description": "+25% speed"},
+	{"id": "range", "name": "Size", "description": "+4 px reach"},
+	{"id": "controls", "name": "Controls", "description": "Space: in / D: reverse"},
+	{"id": "armor", "name": "Armor", "description": "-5 energy per hit"},
+	{"id": "repair", "name": "Repair", "description": "+40 energy"},
+]
 const SAVE_FILE := "user://greedy_orbit_best.txt"
 
 const BACK := Color("#0b1221")
@@ -28,7 +55,7 @@ const GOLD := Color("#ffc857")
 const GREEN := Color("#64e9a7")
 
 var rng := RandomNumberGenerator.new()
-var state := "menu"                       # menu, playing, paused, dead
+var state := "menu"                       # menu, playing, paused, shop, dead
 var elapsed := 0.0
 var angle := -PI / 2.0
 var orbit_direction := 1.0                # 1.0 = clockwise, -1.0 = counterclockwise
@@ -36,20 +63,30 @@ var orbit_radius := OUTER_RADIUS
 var player_pos := CENTER + Vector2.UP * OUTER_RADIUS
 var spawn_clock := 0.0
 var points := 0.0
+var money := 0
+var guard_owned := false
+var guard_controls_owned := false
+var guard_speed_level := 0
+var guard_range_level := 0
+var shield_armor_level := 0
+var shop_message := ""
 var best_score := 0
 var shield_energy := SHIELD_MAX_ENERGY
 var combo := 1
 var combo_clock := 0.0
-var total_near_misses := 0
-var perfect_misses := 0
+var hazards_destroyed := 0
+var satellites_destroyed := 0
 var next_wave := 2
 var time_to_wave_message := 0.0
 var flash := 0.0
 var shake := 0.0
+var arena_offset := Vector2.ZERO         # last drawn shake offset, also used for click targeting
 var death_reason := "player"
+var game_over_clock := 0.0
 var hazards: Array[Dictionary] = []
 var particles: Array[Dictionary] = []
 var popups: Array[Dictionary] = []
+var click_pulses: Array[Dictionary] = []
 var trail: Array[Vector2] = []
 var stars: Array[Vector2] = []
 
@@ -63,13 +100,31 @@ func _ready() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	var click_pulse: Dictionary = {}
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		var cursor_event: InputEventMouseButton = make_input_local(event)
+		click_pulse = {"position": cursor_event.position, "age": 0.0, "color": CYAN}
+		click_pulses.append(click_pulse)
+		if click_pulses.size() > MAX_CLICK_PULSES:
+			click_pulses.pop_front()
+		queue_redraw()
+	# Ignore gameplay clicks and restart keys during the results delay.
+	# Discard them here so they cannot restart the run when the delay ends.
+	if state == "dead" and game_over_clock > 0.0:
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_D:
+		if event.keycode == KEY_B:
+			toggle_shop()
+		elif state == "shop" and event.keycode >= KEY_1 and event.keycode <= KEY_6:
+			buy_upgrade(str(SHOP_ITEMS[event.keycode - KEY_1]["id"]))
+		elif event.keycode == KEY_D:
 			reverse_orbit_direction()
 		elif event.keycode == KEY_R:
 			start_game()
 		elif event.keycode == KEY_P or event.keycode == KEY_ESCAPE:
-			if state == "playing":
+			if state == "shop":
+				toggle_shop()
+			elif state == "playing":
 				state = "paused"
 			elif state == "paused":
 				state = "playing"
@@ -79,18 +134,155 @@ func _input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if state == "menu" or state == "dead":
 			start_game()
+		elif state == "playing":
+			var local_event: InputEventMouseButton = make_input_local(event)
+			if SHOP_BUTTON.has_point(local_event.position):
+				toggle_shop()
+			else:
+				if destroy_hazard_at(local_event.position - arena_offset):
+					click_pulse["color"] = GREEN
+		elif state == "shop":
+			var local_event: InputEventMouseButton = make_input_local(event)
+			if SHOP_CLOSE_BUTTON.has_point(local_event.position):
+				toggle_shop()
+			else:
+				for i in range(SHOP_ITEMS.size()):
+					if shop_row_rect(i).has_point(local_event.position):
+						if buy_upgrade(str(SHOP_ITEMS[i]["id"])):
+							click_pulse["color"] = GREEN
+						break
+
+
+func toggle_shop() -> void:
+	if state == "playing":
+		state = "shop"
+		shop_message = ""
+	elif state == "shop":
+		state = "playing"
+	queue_redraw()
+
+
+func shop_row_rect(index: int) -> Rect2:
+	return Rect2(190, 238 + index * 54, 580, 46)
+
+
+func upgrade_cost(item: String) -> int:
+	match item:
+		"guard": return GUARD_COST
+		"controls": return GUARD_CONTROLS_COST
+		"speed": return GUARD_UPGRADE_COST * (guard_speed_level + 1)
+		"range": return GUARD_UPGRADE_COST * (guard_range_level + 1)
+		"armor": return SHIELD_ARMOR_COST * (shield_armor_level + 1)
+		"repair": return SHIELD_REPAIR_COST
+	return -1
+
+
+func upgrade_lock_reason(item: String) -> String:
+	match item:
+		"guard":
+			return "OWNED" if guard_owned else ""
+		"controls":
+			if not guard_owned: return "NEED GUARD"
+			return "OWNED" if guard_controls_owned else ""
+		"speed", "range":
+			if not guard_owned: return "NEED GUARD"
+			var level := guard_speed_level if item == "speed" else guard_range_level
+			return "MAX" if level >= MAX_UPGRADE_LEVEL else ""
+		"armor":
+			return "MAX" if shield_armor_level >= MAX_UPGRADE_LEVEL else ""
+		"repair":
+			return "FULL" if shield_energy >= SHIELD_MAX_ENERGY else ""
+	return "UNAVAILABLE"
+
+
+func buy_upgrade(item: String) -> bool:
+	if state != "shop":
+		return false
+	var reason := upgrade_lock_reason(item)
+	var cost := upgrade_cost(item)
+	if not reason.is_empty():
+		shop_message = reason
+		queue_redraw()
+		return false
+	if money < cost:
+		shop_message = "Need $" + str(cost - money)
+		queue_redraw()
+		return false
+	money -= cost
+	match item:
+		"guard":
+			guard_owned = true
+			angle = -PI / 2.0
+			orbit_radius = OUTER_RADIUS
+			orbit_direction = 1.0
+			player_pos = CENTER + Vector2.UP * orbit_radius
+			trail.clear()
+		"controls": guard_controls_owned = true
+		"speed": guard_speed_level += 1
+		"range": guard_range_level += 1
+		"armor": shield_armor_level += 1
+		"repair": shield_energy = minf(SHIELD_MAX_ENERGY, shield_energy + SHIELD_REPAIR_ENERGY)
+	shop_message = "-$" + str(cost)
+	$StartSound.play()
+	queue_redraw()
+	return true
+
+
+func guard_speed() -> float:
+	return ORBIT_SPEED * (1.0 + 0.25 * guard_speed_level)
+
+
+func guard_size() -> float:
+	return PLAYER_SIZE + 4.0 * guard_range_level
+
+
+func shield_hit_cost() -> float:
+	return SHIELD_HIT_COST - 5.0 * shield_armor_level
+
+
+func destroy_hazard_at(where: Vector2) -> bool:
+	if state != "playing":
+		return false
+	# Pick the last drawn (topmost) hazard when targets overlap.
+	for i in range(hazards.size() - 1, -1, -1):
+		var hazard: Dictionary = hazards[i]
+		if not is_hazard_collectible(hazard):
+			continue
+		var position := hazard_position(hazard)
+		if where.distance_to(position) <= float(hazard["size"]) + CLICK_PADDING:
+			destroy_hazard(hazard, position)
+			hazards.remove_at(i)
+			queue_redraw()
+			return true
+	return false
 
 
 func reverse_orbit_direction() -> void:
+	if not guard_owned or not guard_controls_owned or (state != "playing" and state != "paused"):
+		return
 	orbit_direction *= -1.0
 	queue_redraw()
 
 
 func _process(delta: float) -> void:
-	# Let collision particles finish even after the simulation stops.
-	if state == "dead" and (not particles.is_empty() or shake > 0.0):
+	# Cursor feedback uses real frame time even when gameplay is paused.
+	if not click_pulses.is_empty():
+		for i in range(click_pulses.size() - 1, -1, -1):
+			var pulse: Dictionary = click_pulses[i]
+			pulse["age"] = float(pulse["age"]) + delta
+			if float(pulse["age"]) >= CLICK_PULSE_DURATION:
+				click_pulses.remove_at(i)
+		queue_redraw()
+	if state != "dead":
+		return
+	var previous_clock := game_over_clock
+	game_over_clock = maxf(0.0, game_over_clock - delta)
+	# The results timer must keep running after collision effects finish.
+	if not particles.is_empty() or not popups.is_empty() or shake > 0.0:
 		update_effects(delta)
 		shake = maxf(0.0, shake - 10.0 * delta)
+		queue_redraw()
+	if previous_clock > 0.0:
 		queue_redraw()
 
 
@@ -101,11 +293,19 @@ func start_game() -> void:
 	orbit_radius = OUTER_RADIUS
 	player_pos = CENTER + Vector2.UP * orbit_radius
 	points = 0.0
+	money = 0
+	guard_owned = false
+	guard_controls_owned = false
+	guard_speed_level = 0
+	guard_range_level = 0
+	shield_armor_level = 0
+	shop_message = ""
+	orbit_direction = 1.0
 	shield_energy = SHIELD_MAX_ENERGY
 	combo = 1
 	combo_clock = 0.0
-	total_near_misses = 0
-	perfect_misses = 0
+	hazards_destroyed = 0
+	satellites_destroyed = 0
 	hazards.clear()
 	particles.clear()
 	popups.clear()
@@ -115,7 +315,9 @@ func start_game() -> void:
 	time_to_wave_message = 2.0
 	flash = 0.0
 	shake = 0.0
+	arena_offset = Vector2.ZERO
 	death_reason = "player"
+	game_over_clock = 0.0
 	$StartSound.play()
 	queue_redraw()
 
@@ -125,20 +327,19 @@ func _physics_process(delta: float) -> void:
 		return
 
 	elapsed += delta
-	shield_energy = maxf(0.0, shield_energy - SHIELD_DECAY_RATE * delta)
 	flash = maxf(0.0, flash - 2.0 * delta)
 	shake = maxf(0.0, shake - 10.0 * delta)
 	time_to_wave_message = maxf(0.0, time_to_wave_message - delta)
 
-	var contract := Input.is_key_pressed(KEY_SPACE) or Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
-	var desired_radius := INNER_RADIUS if contract else OUTER_RADIUS
-	orbit_radius = move_toward(orbit_radius, desired_radius, RADIUS_CHANGE_SPEED * delta)
-	angle = wrapf(angle + ORBIT_SPEED * orbit_direction * delta, -PI, PI)
-	player_pos = CENTER + Vector2(cos(angle), sin(angle)) * orbit_radius
-
-	trail.append(player_pos)
-	if trail.size() > 22:
-		trail.pop_front()
+	if guard_owned:
+		var contract := guard_controls_owned and Input.is_key_pressed(KEY_SPACE)
+		var desired_radius := INNER_RADIUS if contract else OUTER_RADIUS
+		orbit_radius = move_toward(orbit_radius, desired_radius, RADIUS_CHANGE_SPEED * delta)
+		angle = wrapf(angle + guard_speed() * orbit_direction * delta, -PI, PI)
+		player_pos = CENTER + Vector2(cos(angle), sin(angle)) * orbit_radius
+		trail.append(player_pos)
+		if trail.size() > 22:
+			trail.pop_front()
 
 	if combo > 1:
 		combo_clock -= delta
@@ -165,13 +366,13 @@ func _physics_process(delta: float) -> void:
 
 func spawn_pattern() -> void:
 	var pattern_roll := rng.randf()
-	if elapsed >= 30.0 and pattern_roll < 0.25:
+	if pattern_roll < ENERGY_SPAWN_CHANCE:
+		spawn_satellite()
+	elif elapsed >= 30.0 and pattern_roll < ENERGY_SPAWN_CHANCE + 0.25:
 		# Twin strike: two drifting hazards aimed near the predicted player path.
 		var base_angle := predicted_drifter_angle()
 		spawn_drifter(base_angle - 0.20)
 		spawn_drifter(base_angle + 0.20)
-	elif elapsed >= 15.0 and pattern_roll < 0.43:
-		spawn_satellite()
 	else:
 		var aim_chance := 0.32 if elapsed < 15.0 else 0.55
 		var planned_angle := predicted_drifter_angle() if rng.randf() < aim_chance else rng.randf_range(-PI, PI)
@@ -183,7 +384,9 @@ func predicted_drifter_angle() -> float:
 	# Hazards pressure a stationary strategy but never have perfect aim.
 	var radial_speed := minf(300.0, 195.0 + elapsed * 1.2)
 	var impact_delay := (340.0 - orbit_radius) / radial_speed
-	return angle + ORBIT_SPEED * orbit_direction * impact_delay + rng.randf_range(-1.70, 1.70)
+	if not guard_owned:
+		return rng.randf_range(-PI, PI)
+	return angle + guard_speed() * orbit_direction * impact_delay + rng.randf_range(-1.70, 1.70)
 
 
 func spawn_drifter(hazard_angle: float) -> void:
@@ -195,13 +398,11 @@ func spawn_drifter(hazard_angle: float) -> void:
 		"speed": minf(300.0, 195.0 + elapsed * 1.2),
 		"age": 0.0,
 		"warmup": 0.35,
-		"min_separation": 99999.0,
-		"awarded": false,
 	})
 
 
 func spawn_satellite() -> void:
-	var player_angular_speed := ORBIT_SPEED * orbit_direction
+	var player_angular_speed := guard_speed() * orbit_direction if guard_owned else 0.0
 	var enemy_speed := -1.4
 	# Target a likely crossing in ~0.9 seconds, with readable lead time.
 	var spawn_angle := angle + (player_angular_speed - enemy_speed) * rng.randf_range(0.88, 1.15)
@@ -214,35 +415,32 @@ func spawn_satellite() -> void:
 		"speed": enemy_speed,
 		"age": 0.0,
 		"warmup": 0.48,
-		"min_separation": 99999.0,
-		"awarded": false,
+		"orbit_duration": rng.randf_range(ENERGY_ORBIT_MIN_DURATION, ENERGY_ORBIT_MAX_DURATION),
 	})
 
 
 func update_hazards(delta: float) -> void:
 	for i in range(hazards.size() - 1, -1, -1):
 		var h: Dictionary = hazards[i]
-		h["age"] = float(h["age"]) + delta
+		var previous_age := float(h["age"])
+		h["age"] = previous_age + delta
 		if h["kind"] == "drifter":
 			h["radius"] = float(h["radius"]) - float(h["speed"]) * delta
 		else:
 			h["angle"] = float(h["angle"]) + float(h["speed"]) * delta
+			# Only the portion of this tick after the deadline contributes to escape movement.
+			var orbit_duration := float(h["orbit_duration"])
+			var escape_delta := maxf(0.0, float(h["age"]) - orbit_duration) - maxf(0.0, previous_age - orbit_duration)
+			h["radius"] = float(h["radius"]) + ENERGY_ESCAPE_SPEED * escape_delta
 
 		var old_enough: bool = float(h["age"]) >= float(h["warmup"])
 		var p: Vector2 = hazard_position(h)
 		var distance := p.distance_to(player_pos)
-		var collision_distance: float = PLAYER_SIZE + float(h["size"])
-		if old_enough:
-			if distance <= collision_distance:
-				die("player")
-				return
-			h["min_separation"] = minf(float(h["min_separation"]), distance)
-			# Score after leaving the danger zone, never merely for being near.
-			if not bool(h["awarded"]) and distance > NEAR_RANGE + 6.0:
-				var closest: float = float(h["min_separation"])
-				if closest >= collision_distance + 1.0 and closest <= NEAR_RANGE:
-					award_near_miss(closest, collision_distance, p)
-					h["awarded"] = true
+		var collision_distance: float = guard_size() + float(h["size"])
+		if guard_owned and old_enough and is_hazard_collectible(h) and distance <= collision_distance:
+			destroy_hazard(h, p)
+			hazards.remove_at(i)
+			continue
 		if h["kind"] == "drifter":
 			var debris_radius := float(h["radius"])
 			var debris_size := float(h["size"])
@@ -254,7 +452,8 @@ func update_hazards(delta: float) -> void:
 				die("planet")
 				return
 		var expired: bool = (h["kind"] == "drifter" and float(h["radius"]) < 38.0)
-		expired = expired or (h["kind"] == "satellite" and float(h["age"]) > 4.3)
+		# Escaping energy satellites remain visible until their body and glow leave the screen.
+		expired = expired or (h["kind"] == "satellite" and not Rect2(Vector2.ZERO, WORLD).grow(float(h["size"]) + CLICK_PADDING).has_point(p))
 		if expired:
 			hazards.remove_at(i)
 
@@ -264,34 +463,51 @@ func hazard_position(h: Dictionary) -> Vector2:
 	return CENTER + Vector2(cos(a), sin(a)) * float(h["radius"])
 
 
-func award_near_miss(closest: float, collision_distance: float, where: Vector2) -> void:
-	var perfect := closest <= collision_distance + 11.0
-	var base := 250 if perfect else 100
+func is_hazard_collectible(hazard: Dictionary) -> bool:
+	return hazard["kind"] != "satellite" or float(hazard["age"]) < float(hazard["orbit_duration"])
+
+
+func destroy_hazard(hazard: Dictionary, where: Vector2) -> void:
+	var recharges_shield: bool = hazard["kind"] == "satellite"
+	var base := SATELLITE_SCORE if recharges_shield else DRIFTER_SCORE
 	var gained: int = base * combo
-	var shield_refill := SHIELD_REFILL_PERFECT if perfect else SHIELD_REFILL_NEAR
+	var earned := SATELLITE_MONEY if recharges_shield else DRIFTER_MONEY
 	points += float(gained)
-	shield_energy = minf(SHIELD_MAX_ENERGY, shield_energy + shield_refill)
-	total_near_misses += 1
-	if perfect:
-		perfect_misses += 1
-	popups.append({"position": where, "label": ("PERFECT! " if perfect else "NEAR! ") + "+" + str(gained), "age": 0.0, "perfect": perfect})
-	spawn_burst(GOLD if perfect else CYAN, where, 13 if perfect else 8)
-	flash = 0.25 if perfect else 0.11
-	shake = 1.7 if perfect else 0.65
+	money += earned
+	hazards_destroyed += 1
+	var label := "+$" + str(earned)
+	var tint := CYAN
+	if recharges_shield:
+		var previous_energy := shield_energy
+		shield_energy = minf(SHIELD_MAX_ENERGY, shield_energy + SHIELD_REFILL_SATELLITE)
+		satellites_destroyed += 1
+		var restored := roundi(shield_energy - previous_energy)
+		if restored > 0:
+			label += " / +" + str(restored) + "%"
+		tint = GREEN
+	popups.append({"position": where, "label": label, "age": 0.0, "color": tint})
+	spawn_burst(tint, where, 13)
+	flash = 0.20
+	shake = maxf(shake, 1.7)
 	combo = mini(5, combo + 1)
 	combo_clock = COMBO_DURATION
-	$NearSound.pitch_scale = 1.0 + float(combo - 1) * 0.08
-	$NearSound.play()
+	$DestroySound.pitch_scale = 1.0 + float(combo - 1) * 0.08
+	$DestroySound.play()
 
 
 func absorb_debris(where: Vector2) -> void:
+	var spent := minf(shield_energy, shield_hit_cost())
+	shield_energy = maxf(0.0, shield_energy - spent)
+	popups.append({"position": where, "label": "-" + str(roundi(spent)) + "%", "age": 0.0, "color": RED})
 	shake = maxf(shake, 1.1)
 	spawn_burst(GREEN, where, 9)
+	$HitSound.play()
 
 
 func die(reason: String) -> void:
 	state = "dead"
 	death_reason = reason
+	game_over_clock = GAME_OVER_RETRY_DELAY
 	shake = 3.0
 	spawn_burst(RED, CENTER if reason == "planet" else player_pos, 32)
 	if int(points) > best_score:
@@ -339,26 +555,51 @@ func _draw() -> void:
 	draw_stars()
 
 	# Pause/menu/death keep arena visible for continuity.
-	var jolt := Vector2.ZERO
+	arena_offset = Vector2.ZERO
 	if shake > 0.0:
-		jolt = Vector2(rng.randf_range(-1.0, 1.0), rng.randf_range(-1.0, 1.0)) * shake
-	draw_set_transform(jolt)
+		arena_offset = Vector2(rng.randf_range(-1.0, 1.0), rng.randf_range(-1.0, 1.0)) * shake
+	draw_set_transform(arena_offset)
 	draw_arena()
 	draw_hazards()
 	draw_trail_and_player()
 	draw_effects()
 	draw_set_transform(Vector2.ZERO)
-	draw_hud()
+	if state == "playing":
+		draw_hud()
 
 	if flash > 0.0:
 		draw_rect(Rect2(Vector2.ZERO, WORLD), Color(CYAN.r, CYAN.g, CYAN.b, flash * 0.13))
 	if state == "menu":
-		draw_overlay("GREEDY ORBIT", "NEAR MISS TO POWER THE SHIELD", "HOLD SPACE / CLICK  =  MOVE IN", "RELEASE = MOVE OUT   |   DIRECTION = " + orbit_direction_label() + " [D]", "PRESS SPACE OR CLICK TO START")
+		draw_overlay("GREEDY ORBIT", "Click. Earn. Upgrade.", "B: Shop   |   Green: energy", "", "Click / Space to start")
 	elif state == "dead":
 		var death_title := "PLANET LOST" if death_reason == "planet" else "ORBIT BROKEN"
-		draw_overlay(death_title, "SCORE  " + str(int(points)) + "     BEST  " + str(best_score), "NEAR MISSES  " + str(total_near_misses), "PERFECT DODGES  " + str(perfect_misses), "D = REVERSE   |   SPACE / CLICK / R = RETRY")
+		var retry_prompt := "Click / Space to retry" if game_over_clock <= 0.0 else ""
+		draw_overlay(death_title, "SCORE  " + str(int(points)) + "     BEST  " + str(best_score), "TIME %.1fs   |   DESTROYED %d" % [elapsed, hazards_destroyed], "ENERGY %d   |   CASH $%d" % [satellites_destroyed, money], retry_prompt)
+		if game_over_clock > 0.0:
+			draw_rect(Rect2(390, 447, 180, 4), Color("#23435c"))
+			var progress := 1.0 - game_over_clock / GAME_OVER_RETRY_DELAY
+			draw_rect(Rect2(390, 447, 180.0 * progress, 4), CYAN)
 	elif state == "paused":
-		draw_overlay("PAUSED", "DIRECTION  " + orbit_direction_label(), "", "", "PRESS P / ESC TO RESUME   |   D TO REVERSE")
+		draw_overlay("PAUSED", "", "", "", "P / Esc to resume")
+	elif state == "shop":
+		draw_shop()
+	# Draw over menus and outside the arena shake transform, at the actual click position.
+	draw_click_pulses()
+
+
+func draw_click_pulses() -> void:
+	for pulse in click_pulses:
+		var progress := clampf(float(pulse["age"]) / CLICK_PULSE_DURATION, 0.0, 1.0)
+		var expansion := 1.0 - pow(1.0 - progress, 3.0)
+		var radius := lerpf(5.0, 27.0, expansion)
+		var opacity := (1.0 - progress) * (1.0 - progress)
+		var position: Vector2 = pulse["position"]
+		var tint: Color = pulse["color"]
+		var color := Color(tint.r, tint.g, tint.b, opacity)
+		draw_arc(position, radius, 0.0, TAU, 40, color, 2.5 - progress, true)
+		draw_circle(position, 3.0 * (1.0 - progress), color)
+		for direction in [Vector2.UP, Vector2.RIGHT, Vector2.DOWN, Vector2.LEFT]:
+			draw_line(position + direction * (radius + 4.0), position + direction * (radius + 9.0), color, 1.5, true)
 
 
 func draw_stars() -> void:
@@ -372,7 +613,8 @@ func draw_arena() -> void:
 	# Light orbit guides and a visually distinct risk zone.
 	draw_arc(CENTER, INNER_RADIUS, 0.0, TAU, 112, Color(0.19, 0.62, 0.78, 0.24), 1.2, true)
 	draw_arc(CENTER, OUTER_RADIUS, 0.0, TAU, 128, Color(0.20, 0.50, 0.69, 0.35), 1.4, true)
-	draw_arc(CENTER, orbit_radius, 0.0, TAU, 128, Color(0.35, 0.84, 0.98, 0.24), 1.0, true)
+	if guard_owned:
+		draw_arc(CENTER, orbit_radius, 0.0, TAU, 128, Color(0.35, 0.84, 0.98, 0.24), 1.0, true)
 	draw_circle(CENTER, 38.0, Color(0.17, 0.32, 0.49, 0.09))
 	draw_circle(CENTER, PLANET_RADIUS, Color("#23435c"))
 	draw_circle(CENTER, 24.0, Color("#315e79"))
@@ -400,25 +642,42 @@ func draw_hazards() -> void:
 	for h in hazards:
 		var p := hazard_position(h)
 		var warming: bool = float(h["age"]) < float(h["warmup"])
-		var col := Color(1.0, 0.39, 0.46, 0.28 if warming else 1.0)
+		var escaping := not is_hazard_collectible(h)
+		var tint := GREEN if h["kind"] == "satellite" else RED
+		var col := Color(tint.r, tint.g, tint.b, 0.35 if escaping else (0.28 if warming else 1.0))
 		if h["kind"] == "drifter":
 			var unit := (p - CENTER).normalized()
 			draw_line(p + unit * 17.0, p + unit * 36.0, Color(1.0, 0.31, 0.40, 0.22), 3.0, true)
+		elif not escaping:
+			draw_arc(CENTER, float(h["radius"]), 0.0, TAU, 120, Color(tint.r, tint.g, tint.b, 0.13), 1.0, true)
 		else:
-			draw_arc(CENTER, float(h["radius"]), 0.0, TAU, 120, Color(1.0, 0.22, 0.35, 0.13), 1.0, true)
-		draw_circle(p, float(h["size"]) + 7.0, Color(1.0, 0.22, 0.34, 0.08 if warming else 0.15))
+			var unit := (p - CENTER).normalized()
+			draw_line(p - unit * 17.0, p - unit * 42.0, Color(GREEN.r, GREEN.g, GREEN.b, 0.25), 3.0, true)
+		draw_circle(p, float(h["size"]) + 7.0, Color(tint.r, tint.g, tint.b, 0.08 if warming else 0.15))
 		draw_circle(p, float(h["size"]), col)
-		draw_circle(p + Vector2(-3.0, -3.0), 2.8, Color(1.0, 0.86, 0.86, 0.32 if warming else 0.9))
+		if h["kind"] == "satellite":
+			draw_line(p + Vector2(-5.0, 0.0), p + Vector2(5.0, 0.0), PALE, 2.0, true)
+			draw_line(p + Vector2(0.0, -5.0), p + Vector2(0.0, 5.0), PALE, 2.0, true)
+			if not escaping:
+				var orbit_duration := float(h["orbit_duration"])
+				var remaining := orbit_duration - float(h["age"])
+				var timer_tint := GOLD if remaining <= 1.0 else GREEN
+				draw_arc(p, float(h["size"]) + 4.0, -PI / 2.0, -PI / 2.0 + TAU * remaining / orbit_duration, 40, timer_tint, 2.0, true)
+		else:
+			draw_circle(p + Vector2(-3.0, -3.0), 2.8, Color(1.0, 0.86, 0.86, 0.32 if warming else 0.9))
 
 
 func draw_trail_and_player() -> void:
+	if not guard_owned:
+		return
 	for i in range(trail.size()):
 		var fraction := float(i + 1) / float(trail.size())
 		draw_circle(trail[i], 2.0 + 4.0 * fraction, Color(0.32, 0.86, 1.0, 0.20 * fraction))
 	if state != "dead":
-		draw_circle(player_pos, PLAYER_SIZE + 10.0, Color(0.26, 0.78, 1.0, 0.15))
-		draw_circle(player_pos, PLAYER_SIZE + 3.0, Color(0.26, 0.78, 1.0, 0.19))
-		draw_circle(player_pos, PLAYER_SIZE, CYAN)
+		var size := guard_size()
+		draw_circle(player_pos, size + 10.0, Color(0.26, 0.78, 1.0, 0.15))
+		draw_circle(player_pos, size + 3.0, Color(0.26, 0.78, 1.0, 0.19))
+		draw_circle(player_pos, size, CYAN)
 		draw_circle(player_pos + Vector2(-2.5, -2.5), 3.0, Color("#ffffff"))
 
 
@@ -429,33 +688,63 @@ func draw_effects() -> void:
 		draw_circle(p["position"], 2.5 * opacity + 0.8, Color(tint.r, tint.g, tint.b, opacity))
 	for popup in popups:
 		var opacity := clampf(1.0 - float(popup["age"]) / 0.75, 0.0, 1.0)
-		var tint := GOLD if bool(popup["perfect"]) else CYAN
+		var tint: Color = popup["color"]
 		var color := Color(tint.r, tint.g, tint.b, opacity)
 		draw_text_center_at(str(popup["label"]), Vector2(popup["position"]).x, Vector2(popup["position"]).y, 17, color)
 
 
 func draw_hud() -> void:
-	draw_text("SCORE", Vector2(28, 36), 16, MUTED)
-	draw_text(str(int(points)).pad_zeros(6), Vector2(28, 73), 30, PALE)
-	draw_text("BEST  " + str(best_score), Vector2(28, 101), 16, MUTED)
+	draw_text("SCORE", Vector2(28, 34), 12, MUTED)
+	draw_text(str(int(points)).pad_zeros(6), Vector2(28, 67), 30, PALE)
+	draw_text("$" + str(money), Vector2(28, 98), 22, GOLD)
+	draw_rect(SHOP_BUTTON, Color("#23435c"))
+	draw_text("Shop [B]", SHOP_BUTTON.position + Vector2(20, 23), 16, CYAN)
 	var energy_fraction := shield_fraction()
 	var energy_color := shield_color(energy_fraction)
 	draw_text_center("SHIELD  " + str(roundi(shield_energy)) + "%", 35, 16, energy_color)
 	draw_rect(Rect2(Vector2(348, 45), Vector2(264, 12)), Color(0.12, 0.20, 0.29, 0.95))
 	draw_rect(Rect2(Vector2(351, 48), Vector2(258.0 * energy_fraction, 6)), energy_color)
 	var combo_color := GOLD if combo >= 3 else CYAN
-	draw_text("COMBO", Vector2(780, 36), 16, MUTED)
-	draw_text("x" + str(combo), Vector2(780, 76), 35, combo_color)
-	draw_text("DIR  " + orbit_direction_label(), Vector2(780, 116), 16, MUTED)
-	draw_text("WAVE " + str(mini(5, int(floor(elapsed / 15.0)) + 1)), Vector2(28, 686), 17, MUTED)
-	draw_text("TIME " + ("%.1f" % elapsed) + "s", Vector2(784, 686), 17, MUTED)
-	draw_text("HOLD = IN   |   RELEASE = OUT   |   D = REVERSE   |   P = PAUSE", Vector2(250, 688), 13, MUTED)
+	draw_text("P: Pause", Vector2(834, 688), 12, MUTED)
+	if guard_owned and guard_controls_owned:
+		draw_text_center("Space: in   |   D: reverse", 688, 12, MUTED)
 	if combo > 1:
+		draw_text("x" + str(combo), Vector2(824, 62), 32, combo_color)
 		draw_rect(Rect2(Vector2(780, 90), Vector2(133, 5)), Color(0.19, 0.31, 0.44))
 		draw_rect(Rect2(Vector2(780, 90), Vector2(133.0 * clampf(combo_clock / COMBO_DURATION, 0.0, 1.0), 5)), combo_color)
 	if time_to_wave_message > 0.0 and state == "playing":
 		var announce_color := Color(CYAN.r, CYAN.g, CYAN.b, minf(1.0, time_to_wave_message))
 		draw_text_center("WAVE " + str(mini(5, int(floor(elapsed / 15.0)) + 1)), 164, 26, announce_color)
+
+
+func draw_shop() -> void:
+	draw_rect(Rect2(Vector2.ZERO, WORLD), Color(0.03, 0.06, 0.11, 0.85))
+	draw_rect(Rect2(168, 136, 624, 488), Color("#122138"))
+	draw_rect(Rect2(168, 136, 624, 4), GOLD)
+	draw_text_center("SHOP", 186, 30, PALE)
+	draw_text_center("$" + str(money), 220, 20, GOLD)
+	draw_rect(SHOP_CLOSE_BUTTON, Color("#23435c"))
+	draw_text("X", SHOP_CLOSE_BUTTON.position + Vector2(13, 23), 20, PALE)
+	for i in range(SHOP_ITEMS.size()):
+		var item: Dictionary = SHOP_ITEMS[i]
+		var id := str(item["id"])
+		var reason := upgrade_lock_reason(id)
+		var cost := upgrade_cost(id)
+		var affordable := reason.is_empty() and money >= cost
+		var row := shop_row_rect(i)
+		draw_rect(row, Color("#23435c") if affordable else Color("#192c43"))
+		var title := str(i + 1) + ". " + str(item["name"])
+		if id == "speed": title += "  " + str(guard_speed_level) + "/3"
+		if id == "range": title += "  " + str(guard_range_level) + "/3"
+		if id == "armor": title += "  " + str(shield_armor_level) + "/3"
+		draw_text(title, row.position + Vector2(12, 19), 16, PALE)
+		draw_text(str(item["description"]), row.position + Vector2(12, 38), 12, MUTED)
+		var button_label := reason
+		if reason.is_empty():
+			button_label = "$" + str(cost)
+		draw_text_center_at(button_label, row.end.x - 88, row.position.y + 26, 13, GREEN if affordable else MUTED)
+	draw_text_center(shop_message, 584, 15, GOLD)
+	draw_text_center("This run only   |   B / Esc: close", 607, 13, MUTED)
 
 
 func orbit_direction_label() -> String:
