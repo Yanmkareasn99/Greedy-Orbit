@@ -4,8 +4,9 @@ extends Node2D
 
 const CENTER := Vector2(480.0, 364.0)
 const WORLD := Vector2(960.0, 720.0)
-const INNER_RADIUS := 126.0
-const OUTER_RADIUS := 234.0
+const ARENA_SCALE := 0.75
+const INNER_RADIUS := 126.0 * ARENA_SCALE
+const OUTER_RADIUS := 234.0 * ARENA_SCALE
 const PLAYER_SIZE := 9.0
 const CLICK_PADDING := 7.0               # include the visible hazard glow in click targets
 const CLICK_PULSE_DURATION := 0.32
@@ -14,8 +15,8 @@ const ORBIT_SPEED := 2.65                 # radians per second (clockwise)
 const RADIUS_CHANGE_SPEED := 235.0        # px per second
 const COMBO_DURATION := 4.5              # seconds before combo starts decaying
 const GAME_OVER_RETRY_DELAY := 2.0       # keep results visible before accepting restart inputs
-const PLANET_RADIUS := 31.0
-const SHIELD_RADIUS := 56.0
+const PLANET_RADIUS := 31.0 * ARENA_SCALE
+const SHIELD_RADIUS := 56.0 * ARENA_SCALE
 const SHIELD_MAX_ENERGY := 100.0
 const SHIELD_HIT_COST := 25.0             # energy spent blocking one incoming hazard
 const SHIELD_REFILL_SATELLITE := 35.0     # energy restored by destroying a green Satellite
@@ -510,7 +511,7 @@ func update_hazards(delta: float) -> void:
 			if debris_radius <= PLANET_RADIUS + debris_size:
 				die("planet")
 				return
-		var expired: bool = (h["kind"] != "satellite" and float(h["radius"]) < 38.0)
+		var expired: bool = (h["kind"] != "satellite" and float(h["radius"]) < PLANET_RADIUS)
 		# Escaping energy satellites remain visible until their body and glow leave the screen.
 		expired = expired or (h["kind"] == "satellite" and not Rect2(Vector2.ZERO, WORLD).grow(float(h["size"]) + CLICK_PADDING).has_point(p))
 		if expired:
@@ -682,17 +683,17 @@ func draw_arena() -> void:
 	draw_arc(CENTER, OUTER_RADIUS, 0.0, TAU, 128, Color(0.20, 0.50, 0.69, 0.35), 1.4, true)
 	if guard_owned:
 		draw_arc(CENTER, orbit_radius, 0.0, TAU, 128, Color(0.35, 0.84, 0.98, 0.24), 1.0, true)
-	draw_circle(CENTER, 38.0, Color(0.17, 0.32, 0.49, 0.09))
+	draw_circle(CENTER, 38.0 * ARENA_SCALE, Color(0.17, 0.32, 0.49, 0.09))
 	draw_circle(CENTER, PLANET_RADIUS, Color("#23435c"))
-	draw_circle(CENTER, 24.0, Color("#315e79"))
-	draw_circle(CENTER + Vector2(-7, -8), 9.0, Color(0.57, 0.83, 0.92, 0.28))
-	draw_arc(CENTER, 33.0, 0.0, TAU, 64, Color(0.55, 0.85, 1.0, 0.72), 1.8, true)
+	draw_circle(CENTER, 24.0 * ARENA_SCALE, Color("#315e79"))
+	draw_circle(CENTER + Vector2(-7, -8) * ARENA_SCALE, 9.0 * ARENA_SCALE, Color(0.57, 0.83, 0.92, 0.28))
+	draw_arc(CENTER, 33.0 * ARENA_SCALE, 0.0, TAU, 64, Color(0.55, 0.85, 1.0, 0.72), 1.8, true)
 	draw_planet_shield()
 	# Dashes around the outer boundary make angular motion easier to read.
 	for n in range(32):
 		var a := TAU * float(n) / 32.0
 		var v := Vector2(cos(a), sin(a))
-		draw_line(CENTER + v * 262.0, CENTER + v * 267.0, Color(0.37, 0.62, 0.76, 0.21), 1.0, true)
+		draw_line(CENTER + v * (262.0 * ARENA_SCALE), CENTER + v * (267.0 * ARENA_SCALE), Color(0.37, 0.62, 0.76, 0.21), 1.0, true)
 
 
 func draw_planet_shield() -> void:
@@ -702,7 +703,7 @@ func draw_planet_shield() -> void:
 	var tint := shield_color(fraction)
 	draw_circle(CENTER, SHIELD_RADIUS, Color(tint.r, tint.g, tint.b, 0.025 + fraction * 0.045))
 	draw_arc(CENTER, SHIELD_RADIUS, 0.0, TAU, 96, Color(tint.r, tint.g, tint.b, 0.30 + fraction * 0.55), 2.0 + fraction * 2.0, true)
-	draw_arc(CENTER, SHIELD_RADIUS + 6.0, -PI / 2.0, -PI / 2.0 + TAU * fraction, 96, tint, 2.0, true)
+	draw_arc(CENTER, SHIELD_RADIUS + 6.0 * ARENA_SCALE, -PI / 2.0, -PI / 2.0 + TAU * fraction, 96, tint, 2.0, true)
 
 
 func draw_hazards() -> void:

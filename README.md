@@ -99,6 +99,7 @@ Most game constants are at the top of `scripts/game.gd`:
 
 - `ORBIT_SPEED`: how fast the player automatically rotates.
 - `RADIUS_CHANGE_SPEED`: how quickly the orbit contracts/expands.
+- `ARENA_SCALE`: size of the planet, shield, and orbit rings (currently 0.75).
 - `INNER_RADIUS` / `OUTER_RADIUS`: playable orbital limits.
 - `CLICK_PADDING`: extra click target radius around each hazard, matching its glow.
 - `DRIFTER_SCORE` / `SATELLITE_SCORE`: points awarded for player destruction before the combo multiplier.

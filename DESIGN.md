@@ -13,7 +13,8 @@
 - Every run starts with $0 and no guard. An unpurchased guard is absent from rendering, movement, and collisions.
 - Left-clicking a visible hazard destroys it immediately, including during its warmup warning. The click target includes the 7 px glow; overlapping targets resolve topmost first, one hazard per click.
 - A $60 guard purchase adds an automatic backup that orbits clockwise and destroys hazards on contact.
-- Manual controls cost $75 and require the guard. Until purchased, Space and D cannot control it. After purchase, Space contracts its orbit from 234 px to 126 px, release expands it, and D reverses direction. Mouse clicks do not change its orbit.
+- The central planet, shield, orbit guides, and boundary decorations use a 0.75 arena scale, making them 25% smaller.
+- Manual controls cost $75 and require the guard. Until purchased, Space and D cannot control it. After purchase, Space contracts its orbit from 175.5 px to 94.5 px, release expands it, and D reverses direction. Mouse clicks do not change its orbit.
 - Colliding with an active hazard destroys it, awards points once, and keeps the player alive.
 - The planet's shield starts with 100 energy and spends 25 energy per blocked incoming hazard, with no passive drain. Its final energy can block one hit.
 - At zero energy the shield disappears; a Drifter, Spiral, or Zigzag that reaches the unshielded planet ends the run.
