@@ -36,15 +36,18 @@ func reset_game(with_guard: bool = true, with_controls: bool = true) -> void:
 
 
 func add_hazard(kind: String, radius: float, hazard_angle: float = 0.0, age: float = 1.0, duration: float = TEST_ENERGY_DURATION) -> void:
-	if kind == "drifter":
-		game.spawn_drifter(hazard_angle)
-	else:
-		game.spawn_satellite()
+	match kind:
+		"drifter": game.spawn_drifter(hazard_angle)
+		"spiral": game.spawn_spiral(hazard_angle)
+		"zigzag": game.spawn_zigzag(hazard_angle)
+		"satellite": game.spawn_satellite()
 	var hazard: Dictionary = game.hazards.back()
 	hazard["angle"] = hazard_angle
 	hazard["radius"] = radius
 	hazard["speed"] = 0.0
 	hazard["age"] = age
+	if hazard.has("base_angle"):
+		hazard["base_angle"] = hazard_angle
 	if kind == "satellite":
 		# Fix fixture lifetimes so boundary checks stay deterministic.
 		hazard["orbit_duration"] = duration
@@ -511,6 +514,89 @@ func run_checks() -> void:
 		key_at(retry_key)
 		check(game.state == "playing", "A new restart key must work after the delay: " + str(retry_key))
 
+	for kind in ["spiral", "zigzag"]:
+		var expected_score: int = game.SPIRAL_SCORE if kind == "spiral" else game.ZIGZAG_SCORE
+		var expected_money: int = game.SPIRAL_MONEY if kind == "spiral" else game.ZIGZAG_MONEY
+		reset_game(false, false)
+		game.shield_energy = 20.0
+		add_hazard(kind, 300.0, 0.0, 0.45)
+		mouse_at(game.hazard_position(game.hazards[0]))
+		check(game.hazards.is_empty() and game.points == expected_score and game.money == expected_money, "Clicks must destroy and reward the new hazard: " + kind)
+		check(game.shield_energy == 20.0 and game.satellites_destroyed == 0, "New incoming hazards must not recharge the shield: " + kind)
+		game.update_hazards(0.0)
+		check(game.money == expected_money and game.hazards_destroyed == 1, "A destroyed new hazard must not award rewards twice: " + kind)
+		reset_game(true, false)
+		add_hazard(kind, game.OUTER_RADIUS, 0.0, 0.45)
+		game.update_hazards(0.0)
+		check(game.hazards.is_empty() and game.money == expected_money and game.state == "playing", "The purchased guard must intercept the new hazard: " + kind)
+		reset_game(true, false)
+		add_hazard(kind, game.OUTER_RADIUS, 0.0, 0.0)
+		game.update_hazards(0.0)
+		check(game.hazards.size() == 1 and game.money == 0, "New hazard warmup must prevent early guard collisions: " + kind)
+		reset_game(false, false)
+		add_hazard(kind, game.SHIELD_RADIUS + 10.0)
+		game.update_hazards(0.0)
+		check(game.hazards.is_empty() and game.shield_energy == 75.0 and game.money == 0 and game.points == 0.0, "A new hazard must damage the shield without awarding rewards: " + kind)
+		game.shield_energy = 0.0
+		add_hazard(kind, game.PLANET_RADIUS + 10.0)
+		game.update_hazards(0.0)
+		check(game.state == "dead" and game.death_reason == "planet", "A new hazard must destroy an unshielded planet: " + kind)
+		reset_game(false, false)
+		add_hazard(kind, 300.0, 0.0, 0.45)
+		var frozen_hazard: Dictionary = game.hazards[0].duplicate(true)
+		key_at(KEY_P)
+		game._physics_process(5.0)
+		check(game.hazards[0] == frozen_hazard, "Pausing must freeze the new hazard's trajectory: " + kind)
+		key_at(KEY_P)
+		game.toggle_shop()
+		game._physics_process(5.0)
+		check(game.hazards[0] == frozen_hazard, "Shopping must freeze the new hazard's trajectory: " + kind)
+
+	reset_game(false, false)
+	game.spawn_spiral(0.0)
+	var spiral: Dictionary = game.hazards[0]
+	spiral["curve_speed"] = 1.0
+	spiral["speed"] = 100.0
+	game.update_hazard_motion(spiral, 0.2)
+	check(spiral["angle"] == 0.0 and spiral["radius"] == 320.0, "Spirals must preserve their readable straight warmup approach.")
+	game.update_hazard_motion(spiral, 0.5)
+	check(is_equal_approx(float(spiral["angle"]), 0.25) and spiral["radius"] == 270.0, "Spirals must curve while continuing inward.")
+	check(game.hazard_position(spiral).y > game.CENTER.y, "A Spiral's world-space path must leave its initial straight line.")
+	var reverse_spiral: Dictionary = spiral.duplicate(true)
+	reverse_spiral["curve_speed"] = -1.0
+	game.update_hazard_motion(reverse_spiral, 0.0)
+	check(float(reverse_spiral["angle"]) < 0.0, "Spirals must support both turning directions.")
+
+	reset_game(false, false)
+	game.spawn_zigzag(0.0)
+	var zigzag: Dictionary = game.hazards[0]
+	zigzag["age"] = zigzag["warmup"]
+	zigzag["turn_period"] = 1.0
+	zigzag["turn_amplitude"] = 0.3
+	zigzag["speed"] = 100.0
+	game.update_hazard_motion(zigzag, 0.2)
+	var before_turn := float(zigzag["angle"])
+	game.update_hazard_motion(zigzag, 0.04)
+	var at_turn := float(zigzag["angle"])
+	var turn_position: Vector2 = game.hazard_position(zigzag)
+	game.update_hazard_motion(zigzag, 0.06)
+	check(before_turn < at_turn and float(zigzag["angle"]) < at_turn, "Zigzag hazards must reverse their turning direction during flight.")
+	check(zigzag["radius"] == 310.0 and game.hazard_position(zigzag).distance_to(turn_position) < 30.0, "Zigzag reversals must keep moving inward without teleporting.")
+	game.update_hazard_motion(zigzag, 0.7)
+	check(absf(float(zigzag["angle"])) <= 0.3, "Zigzag steering must stay within its configured angular range.")
+
+	for kind in ["spiral", "zigzag"]:
+		reset_game(false, false)
+		if kind == "spiral": game.spawn_spiral(0.5)
+		else: game.spawn_zigzag(0.5)
+		var one_step: Dictionary = game.hazards[0].duplicate(true)
+		var many_steps: Dictionary = one_step.duplicate(true)
+		game.update_hazard_motion(one_step, 0.8)
+		for i in range(80):
+			game.update_hazard_motion(many_steps, 0.01)
+		check(game.hazard_position(one_step).distance_to(game.hazard_position(many_steps)) < 0.01, "New trajectories must be consistent across different tick sizes: " + kind)
+		check(many_steps["trail"].size() == game.HAZARD_TRAIL_LENGTH, "New hazard trails must have bounded memory: " + kind)
+
 	# Seeded sampling checks that energy remains rare in every wave,
 	# including waves where Twin Strike competes with its spawn chance.
 	for wave_elapsed in [0.0, 20.0, 40.0, 80.0]:
@@ -519,6 +605,8 @@ func run_checks() -> void:
 		game.rng.seed = 20261014
 		var energy_spawns := 0
 		var twin_spawns := 0
+		var spiral_spawns := 0
+		var zigzag_spawns := 0
 		for i in range(1000):
 			game.hazards.clear()
 			game.spawn_pattern()
@@ -526,9 +614,13 @@ func run_checks() -> void:
 				energy_spawns += 1
 			if game.hazards.size() == 2:
 				twin_spawns += 1
+			if game.hazards[0]["kind"] == "spiral": spiral_spawns += 1
+			if game.hazards[0]["kind"] == "zigzag": zigzag_spawns += 1
 		check(energy_spawns >= 60 and energy_spawns <= 140, "Energy spawn frequency must stay around 10 percent at elapsed time " + str(wave_elapsed) + ".")
 		if wave_elapsed >= 30.0:
 			check(twin_spawns >= 200 and twin_spawns <= 300, "Rarer energy must preserve the Twin Strike frequency.")
+		check(spiral_spawns > 0, "Spiral hazards must appear in the spawn mix at elapsed time " + str(wave_elapsed))
+		check(zigzag_spawns > 0 if wave_elapsed >= 15.0 else zigzag_spawns == 0, "Zigzag hazards must enter the spawn mix from wave two.")
 
 	reset_game(false, false)
 	# Exercise the shop drawing path with both locked and owned upgrades.
@@ -536,6 +628,14 @@ func run_checks() -> void:
 	add_hazard("satellite", game.OUTER_RADIUS, 0.0, 1.0)
 	add_hazard("satellite", game.OUTER_RADIUS, 1.0, TEST_ENERGY_DURATION - 0.5)
 	add_hazard("satellite", game.OUTER_RADIUS, 2.0, TEST_ENERGY_DURATION + 0.1)
+	game.spawn_spiral(0.0)
+	game.spawn_zigzag(1.0)
+	var visible_zigzag: Dictionary = game.hazards.back()
+	visible_zigzag["age"] = visible_zigzag["warmup"]
+	visible_zigzag["turn_period"] = 1.0
+	for i in range(12):
+		game.update_hazard_motion(game.hazards[3], 1.0 / 60.0)
+		game.update_hazard_motion(visible_zigzag, 1.0 / 60.0)
 	game.draw.connect(record_draw)
 	game.toggle_shop()
 	game.queue_redraw()

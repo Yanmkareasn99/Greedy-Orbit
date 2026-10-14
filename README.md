@@ -32,14 +32,15 @@ Destroy **green Rogue Satellites** to recharge the planet's shield; intercept re
 - Click a visible hazard, including its glow or warmup warning, to destroy it. One click destroys one target; missed clicks do not score.
 - Each click shows a brief expanding ring and sparks at the cursor. Successful hazard hits and purchases turn the pulse green; feedback also works while paused, shopping, or viewing results.
 - A purchasable orbiting backup destroys hazards on contact. It is absent until bought, and its controls are a separate paid unlock. Clicking never moves it.
-- Radial **Drifters**, counterclockwise **Rogue Satellites**, and **Twin Strike** patterns.
+- Radial **Drifters**, purple **Spirals** that curve inward, gold diamond **Zigzags** that reverse their turning direction, green energy **Satellites**, and **Twin Strike** patterns.
+- Spirals appear from wave one; Zigzags join at 15 seconds. Motion trails reveal their paths, and Zigzags flash a ring just before turning.
 - Spawn prediction with random aim errors (hazards pressure rather than strictly track the player).
-- A planet shield that spends **25 energy per blocked Drifter**, with no passive drain.
-- Click destruction and backup collisions are the only sources of points: **100 per Drifter**, **250 per Satellite**, multiplied by the current combo.
+- A planet shield that spends **25 energy per blocked incoming hazard**, with no passive drain. Drifters, Spirals, and Zigzags all threaten the planet.
+- Click destruction and backup collisions are the only sources of points: **100 per Drifter**, **150 per Spiral**, **200 per Zigzag**, **250 per Satellite**, multiplied by the current combo.
 - Destroying a **green Satellite** restores **35 shield energy**, up to 100, even when the shield is empty. Satellites appear from the first wave.
 - Green energy Satellites have a **10% chance per spawn pattern** in every wave. Each gets its own random **2.5–6 second** collection window when it spawns; its countdown ring follows that timer and turns gold for the final second. Missed energy flies outward, becomes uncollectable, and disappears off-screen without rewards.
 - Near misses, survival, expired hazards, and shield blocks award no points.
-- Destroyed Drifters pay **$10** and destroyed Satellites pay **$25**, from clicks or guard interceptions. Money rewards are fixed and do not use the score combo. Other events award no money.
+- Destruction pays **$10 per Drifter**, **$15 per Spiral**, **$20 per Zigzag**, and **$25 per Satellite**, from clicks or guard interceptions. Money rewards are fixed and do not use the score combo. Only green Satellites recharge the shield. Other events award no money.
 - Planet-impact game over, x1–x5 destruction combo, elapsed time, and wave progression.
 - Game over shows score, best score, time, destruction counts, and remaining cash. All restart inputs are ignored for **2 seconds**; retry then requires a fresh click or key press.
 - Best score saved locally to `user://greedy_orbit_best.txt`.
@@ -104,7 +105,9 @@ Most game constants are at the top of `scripts/game.gd`:
 - `DRIFTER_MONEY` / `SATELLITE_MONEY`: fixed money rewards per destruction.
 - `GUARD_COST` / `GUARD_CONTROLS_COST` / `GUARD_UPGRADE_COST`: guard and upgrade prices.
 - `SHIELD_ARMOR_COST` / `SHIELD_REPAIR_COST`: shield support prices.
-- `SHIELD_HIT_COST`: energy spent blocking a Drifter.
+- `SPIRAL_SCORE` / `SPIRAL_MONEY` / `ZIGZAG_SCORE` / `ZIGZAG_MONEY`: rewards for the new moving hazards.
+- `HAZARD_TRAIL_LENGTH`: maximum trail history for curving and turning hazards.
+- `SHIELD_HIT_COST`: energy spent blocking an incoming hazard.
 - `SHIELD_REFILL_SATELLITE`: energy restored by destroying a green Satellite.
 - `ENERGY_SPAWN_CHANCE`: chance for a green energy Satellite in each spawn pattern.
 - `ENERGY_ORBIT_MIN_DURATION` / `ENERGY_ORBIT_MAX_DURATION`: bounds for each satellite's random collection window.

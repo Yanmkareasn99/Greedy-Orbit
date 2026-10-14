@@ -17,12 +17,17 @@ const GAME_OVER_RETRY_DELAY := 2.0       # keep results visible before accepting
 const PLANET_RADIUS := 31.0
 const SHIELD_RADIUS := 56.0
 const SHIELD_MAX_ENERGY := 100.0
-const SHIELD_HIT_COST := 25.0             # energy spent blocking one incoming Drifter
+const SHIELD_HIT_COST := 25.0             # energy spent blocking one incoming hazard
 const SHIELD_REFILL_SATELLITE := 35.0     # energy restored by destroying a green Satellite
 const DRIFTER_SCORE := 100
 const SATELLITE_SCORE := 250
 const DRIFTER_MONEY := 10
 const SATELLITE_MONEY := 25
+const SPIRAL_SCORE := 150
+const SPIRAL_MONEY := 15
+const ZIGZAG_SCORE := 200
+const ZIGZAG_MONEY := 20
+const HAZARD_TRAIL_LENGTH := 16
 const ENERGY_SPAWN_CHANCE := 0.10
 const ENERGY_ORBIT_MIN_DURATION := 2.5   # shortest random collection window
 const ENERGY_ORBIT_MAX_DURATION := 6.0   # longest random collection window
@@ -53,6 +58,7 @@ const CYAN := Color("#61e4ff")
 const RED := Color("#ff5f75")
 const GOLD := Color("#ffc857")
 const GREEN := Color("#64e9a7")
+const PURPLE := Color("#ba8cff")
 
 var rng := RandomNumberGenerator.new()
 var state := "menu"                       # menu, playing, paused, shop, dead
@@ -376,7 +382,13 @@ func spawn_pattern() -> void:
 	else:
 		var aim_chance := 0.32 if elapsed < 15.0 else 0.55
 		var planned_angle := predicted_drifter_angle() if rng.randf() < aim_chance else rng.randf_range(-PI, PI)
-		spawn_drifter(planned_angle)
+		var motion_roll := rng.randf()
+		if motion_roll < 0.25:
+			spawn_spiral(planned_angle)
+		elif elapsed >= 15.0 and motion_roll < 0.45:
+			spawn_zigzag(planned_angle)
+		else:
+			spawn_drifter(planned_angle)
 
 
 func predicted_drifter_angle() -> float:
@@ -401,6 +413,37 @@ func spawn_drifter(hazard_angle: float) -> void:
 	})
 
 
+func spawn_spiral(hazard_angle: float) -> void:
+	hazards.append({
+		"kind": "spiral",
+		"angle": hazard_angle,
+		"base_angle": hazard_angle,
+		"radius": 340.0,
+		"size": 11.0,
+		"speed": minf(270.0, 175.0 + elapsed),
+		"curve_speed": rng.randf_range(0.65, 1.15) * (-1.0 if rng.randf() < 0.5 else 1.0),
+		"age": 0.0,
+		"warmup": 0.45,
+		"trail": [],
+	})
+
+
+func spawn_zigzag(hazard_angle: float) -> void:
+	hazards.append({
+		"kind": "zigzag",
+		"angle": hazard_angle,
+		"base_angle": hazard_angle,
+		"radius": 340.0,
+		"size": 12.0,
+		"speed": minf(250.0, 155.0 + elapsed * 0.9),
+		"turn_amplitude": rng.randf_range(0.22, 0.38),
+		"turn_period": rng.randf_range(0.8, 1.3),
+		"age": 0.0,
+		"warmup": 0.45,
+		"trail": [],
+	})
+
+
 func spawn_satellite() -> void:
 	var player_angular_speed := guard_speed() * orbit_direction if guard_owned else 0.0
 	var enemy_speed := -1.4
@@ -419,19 +462,35 @@ func spawn_satellite() -> void:
 	})
 
 
+func update_hazard_motion(h: Dictionary, delta: float) -> void:
+	var previous_age := float(h["age"])
+	if h.has("trail") and delta > 0.0:
+		var path: Array = h["trail"]
+		path.append(hazard_position(h))
+		if path.size() > HAZARD_TRAIL_LENGTH:
+			path.pop_front()
+	h["age"] = previous_age + delta
+	if h["kind"] == "satellite":
+		h["angle"] = float(h["angle"]) + float(h["speed"]) * delta
+		# Only the portion of this tick after the deadline contributes to escape movement.
+		var orbit_duration := float(h["orbit_duration"])
+		var escape_delta := maxf(0.0, float(h["age"]) - orbit_duration) - maxf(0.0, previous_age - orbit_duration)
+		h["radius"] = float(h["radius"]) + ENERGY_ESCAPE_SPEED * escape_delta
+	else:
+		h["radius"] = float(h["radius"]) - float(h["speed"]) * delta
+		var active_age := maxf(0.0, float(h["age"]) - float(h["warmup"]))
+		if h["kind"] == "spiral":
+			h["angle"] = float(h["base_angle"]) + float(h["curve_speed"]) * active_age
+		elif h["kind"] == "zigzag":
+			# A triangle wave reverses the turning direction without jumping position.
+			var phase := TAU * active_age / float(h["turn_period"])
+			h["angle"] = float(h["base_angle"]) + float(h["turn_amplitude"]) * (2.0 / PI) * asin(sin(phase))
+
+
 func update_hazards(delta: float) -> void:
 	for i in range(hazards.size() - 1, -1, -1):
 		var h: Dictionary = hazards[i]
-		var previous_age := float(h["age"])
-		h["age"] = previous_age + delta
-		if h["kind"] == "drifter":
-			h["radius"] = float(h["radius"]) - float(h["speed"]) * delta
-		else:
-			h["angle"] = float(h["angle"]) + float(h["speed"]) * delta
-			# Only the portion of this tick after the deadline contributes to escape movement.
-			var orbit_duration := float(h["orbit_duration"])
-			var escape_delta := maxf(0.0, float(h["age"]) - orbit_duration) - maxf(0.0, previous_age - orbit_duration)
-			h["radius"] = float(h["radius"]) + ENERGY_ESCAPE_SPEED * escape_delta
+		update_hazard_motion(h, delta)
 
 		var old_enough: bool = float(h["age"]) >= float(h["warmup"])
 		var p: Vector2 = hazard_position(h)
@@ -441,7 +500,7 @@ func update_hazards(delta: float) -> void:
 			destroy_hazard(h, p)
 			hazards.remove_at(i)
 			continue
-		if h["kind"] == "drifter":
+		if h["kind"] != "satellite":
 			var debris_radius := float(h["radius"])
 			var debris_size := float(h["size"])
 			if shield_energy > 0.0 and debris_radius <= SHIELD_RADIUS + debris_size:
@@ -451,7 +510,7 @@ func update_hazards(delta: float) -> void:
 			if debris_radius <= PLANET_RADIUS + debris_size:
 				die("planet")
 				return
-		var expired: bool = (h["kind"] == "drifter" and float(h["radius"]) < 38.0)
+		var expired: bool = (h["kind"] != "satellite" and float(h["radius"]) < 38.0)
 		# Escaping energy satellites remain visible until their body and glow leave the screen.
 		expired = expired or (h["kind"] == "satellite" and not Rect2(Vector2.ZERO, WORLD).grow(float(h["size"]) + CLICK_PADDING).has_point(p))
 		if expired:
@@ -470,13 +529,21 @@ func is_hazard_collectible(hazard: Dictionary) -> bool:
 func destroy_hazard(hazard: Dictionary, where: Vector2) -> void:
 	var recharges_shield: bool = hazard["kind"] == "satellite"
 	var base := SATELLITE_SCORE if recharges_shield else DRIFTER_SCORE
-	var gained: int = base * combo
 	var earned := SATELLITE_MONEY if recharges_shield else DRIFTER_MONEY
+	if hazard["kind"] == "spiral":
+		base = SPIRAL_SCORE
+		earned = SPIRAL_MONEY
+	elif hazard["kind"] == "zigzag":
+		base = ZIGZAG_SCORE
+		earned = ZIGZAG_MONEY
+	var gained: int = base * combo
 	points += float(gained)
 	money += earned
 	hazards_destroyed += 1
 	var label := "+$" + str(earned)
 	var tint := CYAN
+	if hazard["kind"] == "spiral": tint = PURPLE
+	if hazard["kind"] == "zigzag": tint = GOLD
 	if recharges_shield:
 		var previous_energy := shield_energy
 		shield_energy = minf(SHIELD_MAX_ENERGY, shield_energy + SHIELD_REFILL_SATELLITE)
@@ -644,17 +711,38 @@ func draw_hazards() -> void:
 		var warming: bool = float(h["age"]) < float(h["warmup"])
 		var escaping := not is_hazard_collectible(h)
 		var tint := GREEN if h["kind"] == "satellite" else RED
+		if h["kind"] == "spiral": tint = PURPLE
+		if h["kind"] == "zigzag": tint = GOLD
 		var col := Color(tint.r, tint.g, tint.b, 0.35 if escaping else (0.28 if warming else 1.0))
+		if h.has("trail"):
+			var path: Array = h["trail"]
+			for i in range(1, path.size()):
+				var opacity := 0.5 * float(i) / float(path.size())
+				draw_line(path[i - 1], path[i], Color(tint.r, tint.g, tint.b, opacity), 2.0, true)
+			if not path.is_empty():
+				draw_line(path.back(), p, Color(tint.r, tint.g, tint.b, 0.5), 2.0, true)
 		if h["kind"] == "drifter":
 			var unit := (p - CENTER).normalized()
 			draw_line(p + unit * 17.0, p + unit * 36.0, Color(1.0, 0.31, 0.40, 0.22), 3.0, true)
-		elif not escaping:
+		elif h["kind"] == "satellite" and not escaping:
 			draw_arc(CENTER, float(h["radius"]), 0.0, TAU, 120, Color(tint.r, tint.g, tint.b, 0.13), 1.0, true)
-		else:
+		elif escaping:
 			var unit := (p - CENTER).normalized()
 			draw_line(p - unit * 17.0, p - unit * 42.0, Color(GREEN.r, GREEN.g, GREEN.b, 0.25), 3.0, true)
 		draw_circle(p, float(h["size"]) + 7.0, Color(tint.r, tint.g, tint.b, 0.08 if warming else 0.15))
-		draw_circle(p, float(h["size"]), col)
+		var size := float(h["size"])
+		if h["kind"] == "zigzag":
+			draw_colored_polygon(PackedVector2Array([p + Vector2.UP * size, p + Vector2.RIGHT * size, p + Vector2.DOWN * size, p + Vector2.LEFT * size]), col)
+			draw_polyline(PackedVector2Array([p + Vector2(-4, -5), p + Vector2(3, -1), p + Vector2(-3, 1), p + Vector2(4, 5)]), PALE, 1.5, true)
+			var active_age := maxf(0.0, float(h["age"]) - float(h["warmup"]))
+			var period := float(h["turn_period"])
+			var time_to_turn := fposmod(0.25 - active_age / period, 0.5) * period
+			if not warming and time_to_turn < 0.15:
+				draw_arc(p, size + 9.0, 0.0, TAU, 32, Color(GOLD.r, GOLD.g, GOLD.b, 1.0 - time_to_turn / 0.15), 2.0, true)
+		else:
+			draw_circle(p, size, col)
+		if h["kind"] == "spiral":
+			draw_arc(p, size * 0.5, float(h["angle"]), float(h["angle"]) + PI * 1.5, 20, PALE, 1.5, true)
 		if h["kind"] == "satellite":
 			draw_line(p + Vector2(-5.0, 0.0), p + Vector2(5.0, 0.0), PALE, 2.0, true)
 			draw_line(p + Vector2(0.0, -5.0), p + Vector2(0.0, 5.0), PALE, 2.0, true)
@@ -663,7 +751,7 @@ func draw_hazards() -> void:
 				var remaining := orbit_duration - float(h["age"])
 				var timer_tint := GOLD if remaining <= 1.0 else GREEN
 				draw_arc(p, float(h["size"]) + 4.0, -PI / 2.0, -PI / 2.0 + TAU * remaining / orbit_duration, 40, timer_tint, 2.0, true)
-		else:
+		elif h["kind"] == "drifter":
 			draw_circle(p + Vector2(-3.0, -3.0), 2.8, Color(1.0, 0.86, 0.86, 0.32 if warming else 0.9))
 
 
