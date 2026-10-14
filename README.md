@@ -72,9 +72,13 @@ Godot 4.x requires the **Compatibility** renderer for Web export; the project al
 5. Upload all generated files together to itch.io (HTML game) or any HTTPS static host.
 6. Test in Chrome or Firefox; Web exports require WebGL 2 and WebAssembly.
 
-Do not double-click `index.html` as a `file://` page. Use a local HTTP server or upload to a host.
-
 Note: browsers may disable persistent high scores in private-browsing mode or when storage is blocked.
+
+## Vercel deployment
+
+The `web/` folder contains the deployable Web export, and `vercel.json` tells Vercel to serve that folder without running build or install commands.
+Push the project (including `web/` and `vercel.json`) to GitHub, import the repository in Vercel with Framework Preset **Other**, and deploy. Keep Vercel's Root Directory at the repository root.
+After gameplay changes, export again to `web/index.html` before pushing so the browser build includes the changes. Play and test the browser game through its Vercel deployment URL.
 
 ## Project files
 
