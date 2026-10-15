@@ -13,15 +13,16 @@
 - Every run starts with $0 and no guard. An unpurchased guard is absent from rendering, movement, and collisions.
 - Left-clicking a visible hazard destroys it immediately, including during its warmup warning. The click target includes the 7 px glow; overlapping targets resolve topmost first, one hazard per click.
 - A $60 guard purchase adds an automatic backup that orbits clockwise and destroys hazards on contact.
-- The central planet, shield, orbit guides, and boundary decorations use a 0.75 arena scale, making them 25% smaller.
-- Manual controls cost $75 and require the guard. Until purchased, Space and D cannot control it. After purchase, Space contracts its orbit from 175.5 px to 94.5 px, release expands it, and D reverses direction. Mouse clicks do not change its orbit.
+- A 0.85 gameplay scale makes orbits and boundary decorations 15% smaller. An additional 0.5 planet scale reduces the planet, shield, and atmospheric glow to 30.6/32.3 px radii, with matching collision boundaries. Orbit radii retain their 0.75 base scale multiplied by 0.85. Hazard spawn distance and speed stay fixed, increasing the time before impact. The title screen keeps its 72/76 px planet and shield radii.
+- Manual controls cost $75 and require the guard. Until purchased, Space and D cannot control it. After purchase, Space contracts its orbit from about 149.2 px to 80.3 px, release expands it, and D reverses direction. Mouse clicks do not change its orbit.
 - Colliding with an active hazard destroys it, awards points once, and keeps the player alive.
 - The planet's shield starts with 100 energy and spends 25 energy per blocked incoming hazard, with no passive drain. Its final energy can block one hit.
 - At zero energy the shield disappears; a Drifter, Spiral, or Zigzag that reaches the unshielded planet ends the run.
 - Destroying a green Rogue Satellite restores 35 shield energy, capped at 100, and can reactivate an empty shield. Destroying red Drifters does not recharge it.
 - Enemy Drifters spawn at a radius of 340 px and move radially toward the center.
 - Purple Spirals also start at 340 px, then curve clockwise or counterclockwise while moving inward. They pay 150 * combo points and $15 on destruction.
-- Gold diamond Zigzags start at 340 px, moving inward while repeatedly reversing angular steering. Their period and angular range vary per hazard. They pay 200 * combo points and $20 on destruction.
+- Gold-trail Zigzags start at 340 px, moving inward while repeatedly reversing angular steering. Their period and angular range vary per hazard. They pay 200 * combo points and $20 on destruction.
+- Incoming hazards use three transparent asteroid sprites with random 0.8–1.7 size multipliers, appearance, initial rotation, and spin. Size and appearance stay fixed for each asteroid; rotation follows its age and freezes with gameplay. Sprite silhouettes are normalized to their collision radii, and all click, guard, shield, and planet checks use the scaled radius. Green energy Satellites keep their distinct recharge symbol.
 - Both new types have 0.45-second warmups and short motion trails. A warning ring appears 0.15 seconds before a Zigzag turns. They can be destroyed by clicks or a purchased guard and never recharge shield energy.
 - Green energy Satellites orbit counterclockwise at a fixed radius near the guard's current orbit. They have a 10% spawn chance in every wave, including waves with Twin Strike.
 - Each energy Satellite gets an independent random collection window between 2.5 and 6 seconds at spawn; the duration stays fixed for that satellite. Its countdown ring follows its own timer and turns gold for the final second. At its deadline it becomes uncollectable by clicks or guards, flies radially outward at 240 px/s, and disappears once its body and glow leave the viewport. Escape awards no points, money, or shield energy and causes no damage.
