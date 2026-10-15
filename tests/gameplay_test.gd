@@ -42,6 +42,11 @@ func add_hazard(kind: String, radius: float, hazard_angle: float = 0.0, age: flo
 		"zigzag": game.spawn_zigzag(hazard_angle)
 		"satellite": game.spawn_satellite()
 	var hazard: Dictionary = game.hazards.back()
+	# Keep the existing collision fixtures deterministic; random sizes are
+	# exercised separately using the real spawn functions below.
+	if kind != "satellite":
+		hazard["size"] = {"drifter": 10.0, "spiral": 11.0, "zigzag": 12.0}[kind]
+		hazard["size_scale"] = 1.0
 	hazard["angle"] = hazard_angle
 	hazard["radius"] = radius
 	hazard["speed"] = 0.0
@@ -151,6 +156,13 @@ func run_checks() -> void:
 	game.update_hazards(0.0)
 	check(game.state == "dead" and game.death_reason == "planet", "An unshielded planet impact must end the run.")
 	check(game.points == 0.0, "A planet impact must not award points.")
+
+	reset_game(false, false)
+	add_hazard("drifter", game.SHIELD_BASE_RADIUS + 10.0)
+	game.update_hazards(0.0)
+	check(game.hazards.size() == 1 and game.shield_energy == 100.0, "The smaller shield must leave hazards at the old impact boundary available for interception.")
+	mouse_at(game.hazard_position(game.hazards[0]))
+	check(game.hazards.is_empty() and game.points == 100.0 and game.shield_energy == 100.0, "Players must be able to destroy a hazard during the extra interception window.")
 
 	reset_game()
 	add_hazard("drifter", game.OUTER_RADIUS, 0.0, 0.0)
@@ -413,6 +425,41 @@ func run_checks() -> void:
 	check(game.guard_speed_level == 0 and game.guard_range_level == 0 and game.shield_armor_level == 0 and game.trail.is_empty(), "Restart must reset every upgrade and remove guard trails.")
 
 	reset_game(false, false)
+	game.arena_offset = Vector2(2.0, -2.0)
+	var pause_target: Vector2 = game.PAUSE_BUTTON.get_center() - game.CENTER
+	add_hazard("drifter", pause_target.length(), pause_target.angle())
+	shop_mouse_at(game.PAUSE_BUTTON.get_center())
+	check(game.state == "paused" and game.hazards.size() == 1 and game.points == 0.0, "The pause button must pause without hitting hazards behind it, regardless of arena shake.")
+	game._physics_process(1.0)
+	check(game.elapsed == 0.0 and game.hazards[0]["age"] == 1.0, "The pause button must freeze the gameplay simulation.")
+	shop_mouse_at(game.RESUME_BUTTON.get_center())
+	check(game.state == "playing" and game.hazards.size() == 1 and game.points == 0.0, "The resume button must return to play without passing its click through to hazards.")
+
+	reset_game()
+	game.points = 1200.0
+	game.money = 85
+	game.shield_energy = 25.0
+	game.guard_speed_level = 2
+	add_hazard("drifter", 250.0)
+	key_at(KEY_P)
+	game.arena_offset = Vector2(2.0, -2.0)
+	shop_mouse_at(game.PAUSE_TITLE_BUTTON.get_center())
+	check(game.state == "menu", "Return to title from pause must open the title without starting another run.")
+	check(game.hazards.is_empty() and game.particles.is_empty() and game.trail.is_empty(), "Returning to title must clear the previous arena.")
+	check(game.points == 0.0 and game.money == 0 and not game.guard_owned and not game.guard_controls_owned and game.guard_speed_level == 0 and game.shield_energy == game.SHIELD_MAX_ENERGY, "Returning to title must reset the run and purchases.")
+	check(game.best_score == 9999999, "Returning to title must preserve the best score.")
+	game._physics_process(5.0)
+	check(game.state == "menu" and game.elapsed == 0.0 and game.hazards.is_empty(), "The title screen must keep the gameplay simulation stopped.")
+	key_at(KEY_ENTER)
+	check(game.state == "playing" and game.money == 0 and game.hazards.is_empty(), "A fresh title-screen input must launch a clean run.")
+	game.die("planet")
+	shop_mouse_at(game.RESULTS_TITLE_BUTTON.get_center())
+	check(game.state == "dead", "The results title button must respect the initial results delay.")
+	game._process(game.GAME_OVER_RETRY_DELAY + 0.1)
+	shop_mouse_at(game.RESULTS_TITLE_BUTTON.get_center())
+	check(game.state == "menu" and game.game_over_clock == 0.0 and game.best_score == 9999999, "The results title button must return to the title and preserve the best score without retrying.")
+
+	reset_game(false, false)
 	game.shield_energy = 20.0
 	add_hazard("satellite", game.OUTER_RADIUS, 0.0, TEST_ENERGY_DURATION - 0.1)
 	game.update_hazards(0.05)
@@ -596,6 +643,66 @@ func run_checks() -> void:
 			game.update_hazard_motion(many_steps, 0.01)
 		check(game.hazard_position(one_step).distance_to(game.hazard_position(many_steps)) < 0.01, "New trajectories must be consistent across different tick sizes: " + kind)
 		check(many_steps["trail"].size() == game.HAZARD_TRAIL_LENGTH, "New hazard trails must have bounded memory: " + kind)
+
+	var small_asteroid: Dictionary = {}
+	var large_asteroid: Dictionary = {}
+	for kind in ["drifter", "spiral", "zigzag"]:
+		reset_game(false, false)
+		game.rng.seed = 20261015
+		var sizes: Array[float] = []
+		var variants: Dictionary = {}
+		var spin_directions: Dictionary = {}
+		var base_size: float = {"drifter": 10.0, "spiral": 11.0, "zigzag": 12.0}[kind]
+		var sizes_in_bounds := true
+		for i in range(64):
+			game.call("spawn_" + kind, 0.0)
+			var asteroid: Dictionary = game.hazards.back()
+			var size := float(asteroid["size"])
+			sizes.append(size)
+			variants[asteroid["sprite_index"]] = true
+			spin_directions[signf(float(asteroid["spin"]))] = true
+			if size < base_size * 0.8 or size > base_size * 1.7: sizes_in_bounds = false
+			if kind == "drifter":
+				if small_asteroid.is_empty() or size < float(small_asteroid["size"]): small_asteroid = asteroid.duplicate(true)
+				if large_asteroid.is_empty() or size > float(large_asteroid["size"]): large_asteroid = asteroid.duplicate(true)
+		check(sizes_in_bounds and sizes.max() - sizes.min() > base_size * 0.5, "Asteroid sizes must vary across the intended range: " + kind)
+		check(variants.size() == 3, "All three asteroid sprites must appear in the spawn mix: " + kind)
+		check(spin_directions.size() == 2, "Asteroids must tumble in both directions: " + kind)
+		var moving_asteroid: Dictionary = game.hazards.back()
+		var initial_size: float = moving_asteroid["size"]
+		var initial_variant: int = moving_asteroid["sprite_index"]
+		game.update_hazard_motion(moving_asteroid, 0.1)
+		check(moving_asteroid["size"] == initial_size and moving_asteroid["sprite_index"] == initial_variant, "An asteroid's size and sprite must stay fixed after spawning: " + kind)
+
+	for original in [small_asteroid, large_asteroid]:
+		reset_game(false, false)
+		var asteroid: Dictionary = original.duplicate(true)
+		asteroid["radius"] = 300.0
+		asteroid["age"] = 1.0
+		game.hazards.append(asteroid)
+		var click_radius: float = float(asteroid["size"]) + game.CLICK_PADDING
+		var asteroid_position: Vector2 = game.hazard_position(asteroid)
+		mouse_at(asteroid_position + Vector2(0, click_radius + 1.0))
+		check(game.hazards.size() == 1 and game.points == 0.0, "Clicks outside each scaled asteroid must miss.")
+		mouse_at(asteroid_position + Vector2(0, click_radius - 0.5))
+		check(game.hazards.is_empty() and game.points == 100.0 and game.money == 10, "Clicks at each scaled asteroid's glow must hit and retain its fixed reward.")
+		asteroid = original.duplicate(true)
+		asteroid["age"] = 1.0
+		asteroid["radius"] = game.SHIELD_RADIUS + float(asteroid["size"]) + 1.0
+		game.hazards.append(asteroid)
+		game.update_hazards(0.0)
+		check(game.shield_energy == 100.0 and game.hazards.size() == 1, "A scaled asteroid must remain outside the shield until its surface reaches it.")
+		asteroid["radius"] = game.SHIELD_RADIUS + float(asteroid["size"]) - 0.1
+		game.update_hazards(0.0)
+		check(game.shield_energy == 75.0 and game.hazards.is_empty(), "Shield collisions must follow the actual size of small and large asteroids.")
+
+	reset_game(true, false)
+	var guard_asteroid: Dictionary = large_asteroid.duplicate(true)
+	guard_asteroid["age"] = 1.0
+	guard_asteroid["radius"] = game.OUTER_RADIUS + game.guard_size() + float(guard_asteroid["size"]) - 0.1
+	game.hazards.append(guard_asteroid)
+	game.update_hazards(0.0)
+	check(game.hazards.is_empty() and game.money == 10, "The guard must intercept the larger surface of a large asteroid.")
 
 	# Seeded sampling checks that energy remains rare in every wave,
 	# including waves where Twin Strike competes with its spawn chance.

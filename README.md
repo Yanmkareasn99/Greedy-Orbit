@@ -7,6 +7,8 @@ Destroy **green Rogue Satellites** to recharge the planet's shield; intercept re
 
 ## Open and play
 
+The default game window is **1440 x 1080**, with the same 4:3 layout. Canvas items render at the window's native resolution, and the browser version adapts to its available screen size. Resizing preserves the aspect ratio and scales mouse targeting with the interface.
+
 1. Install Godot **4.4 or newer** (standard edition / GDScript; 4.5 or 4.6 is fine).
 2. Unzip this project anywhere.
 3. Open Godot > **Import** > browse to `project.godot`.
@@ -25,14 +27,19 @@ Destroy **green Rogue Satellites** to recharge the planet's shield; intercept re
 | Click shop row / 1–6 (in shop) | Buy the selected item |
 | Space / click / Enter | Start from title or retry after the game-over delay |
 | R | Restart; blocked during the game-over delay |
-| P or Esc | Pause / resume |
+| P or Esc / HUD pause button | Pause / resume; the pause screen also has a Resume button |
+| Return to title (pause / results) | End the current run and open the title screen; results buttons unlock after the 2-second delay |
 
 ## Included in prototype
 
+- A neon space-arcade interface with cyan/magenta accents, glowing orbit rings and panel borders, and an animated orbital title screen. The grouped score/credits/shield HUD, segmented shield meter, wave and guard status, and matching upgrade, pause, and results panels share the same theme. Buttons and shop rows highlight on hover.
+- A textured, rotating planet with detailed continents, oceans, polar ice, directional sunlight, ocean reflections, atmospheric scattering, and an independently drifting cloud layer. Planet motion freezes during pause, shopping, and game over. The title-screen satellites orbit continuously.
+- A spherical sci-fi shield made of neon-blue hexagonal glass plates, about 80% transparent, with bright connected edges, a soft glow inside each hex, faceted reflections, a blue atmospheric rim, independent random brightness pulses, and localized impact ripples. The dome weakens and changes to amber/red as energy drops, disappears when depleted, and returns when recharged. Shield animation pauses with gameplay.
+- Orbit rings have traveling energy streaks, directional chevrons, counter-rotating segments, gentle brightness pulses, and rotating boundary ticks with a light sweep. These effects appear during gameplay and on the title screen, and freeze when gameplay pauses.
 - Click a visible hazard, including its glow or warmup warning, to destroy it. One click destroys one target; missed clicks do not score.
 - Each click shows a brief expanding ring and sparks at the cursor. Successful hazard hits and purchases turn the pulse green; feedback also works while paused, shopping, or viewing results.
 - A purchasable orbiting backup destroys hazards on contact. It is absent until bought, and its controls are a separate paid unlock. Clicking never moves it.
-- Radial **Drifters**, purple **Spirals** that curve inward, gold diamond **Zigzags** that reverse their turning direction, green energy **Satellites**, and **Twin Strike** patterns.
+- Incoming **Drifters**, **Spirals**, and **Zigzags** use three detailed asteroid sprites: cratered gray rock, jagged rust-colored rock, and fractured charcoal rock. Each gets a random 80%-170% size, sprite, initial rotation, and tumble speed. Click, guard, shield, and planet collisions use its actual scaled radius. Red, purple, and gold halos/trails identify movement types; green energy **Satellites** retain their recharge symbol.
 - Spirals appear from wave one; Zigzags join at 15 seconds. Motion trails reveal their paths, and Zigzags flash a ring just before turning.
 - Spawn prediction with random aim errors (hazards pressure rather than strictly track the player).
 - A planet shield that spends **25 energy per blocked incoming hazard**, with no passive drain. Drifters, Spirals, and Zigzags all threaten the planet.
@@ -44,7 +51,7 @@ Destroy **green Rogue Satellites** to recharge the planet's shield; intercept re
 - Planet-impact game over, x1–x5 destruction combo, elapsed time, and wave progression.
 - Game over shows score, best score, time, destruction counts, and remaining cash. All restart inputs are ignored for **2 seconds**; retry then requires a fresh click or key press.
 - Best score saved locally to `user://greedy_orbit_best.txt`.
-- Geometric graphics drawn with `Node2D._draw()`; 3 tiny generated WAV effects.
+- Neon graphics drawn with `Node2D._draw()`, a shaded planet rendered to a small 2D viewport, and 3 tiny generated WAV effects.
 
 ## Shop and upgrades
 
@@ -99,7 +106,10 @@ Most game constants are at the top of `scripts/game.gd`:
 
 - `ORBIT_SPEED`: how fast the player automatically rotates.
 - `RADIUS_CHANGE_SPEED`: how quickly the orbit contracts/expands.
-- `ARENA_SCALE`: size of the planet, shield, and orbit rings (currently 0.75).
+- `GAMEPLAY_SCALE`: scales the gameplay planet, shield, orbit rings, and boundary decorations to 85% of their original size. Hazards retain their spawn distance and speed, giving more time before impact.
+- `PLANET_SCALE`: an additional 0.5 multiplier for the gameplay planet, shield, and atmospheric glow, keeping the surrounding orbit rings at their existing size.
+- `ARENA_SCALE`: orbit and boundary scale, calculated as `0.75 * GAMEPLAY_SCALE`.
+- `PLANET_RADIUS` / `SHIELD_RADIUS`: gameplay planet and shield radii (30.6 / 32.3 px), with matching collision boundaries. The title screen uses their unscaled 72 / 76 px base radii.
 - `INNER_RADIUS` / `OUTER_RADIUS`: playable orbital limits.
 - `CLICK_PADDING`: extra click target radius around each hazard, matching its glow.
 - `DRIFTER_SCORE` / `SATELLITE_SCORE`: points awarded for player destruction before the combo multiplier.
@@ -121,4 +131,9 @@ Spawn cadence is in `_physics_process()`; hazard patterns are in `spawn_pattern(
 ## Validation status
 
 Run the gameplay checks with `godot --headless --path . --script res://tests/gameplay_test.gd`.
+Run the planet and shield rendering checks with `godot --path . --script res://tests/planet_render_test.gd` using a graphical renderer.
 They cover mouse targeting, scoring and money rewards, absent and purchased guards, paid controls, shop input and pausing, purchase prerequisites and prices, upgrade effects and caps, shield repairs and damage, energy spawn frequency and escape deadlines, and restart resets.
+
+Run `godot --path . --resolution 1440x1080 --script res://tests/performance_probe.gd` for an uncapped desktop rendering benchmark. It warms up each scene, then reports mean and 95th-percentile frame time and average draw calls for the title screen, 32 asteroids with a guard, and the shop. Compare runs on the same hardware and window size; this is a benchmark, with no hardware-dependent pass threshold.
+
+The static background is cached, orbit streaks use batched colored lines, and planet/shield render buffers scale with their displayed size (128–320 px). Rotation, shield reflections, and moving orbit effects continue to animate.
